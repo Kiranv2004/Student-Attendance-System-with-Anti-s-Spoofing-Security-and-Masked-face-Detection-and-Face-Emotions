@@ -28,13 +28,12 @@ RUN apt-get update && apt-get install -y software-properties-common && \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Upgrade pip and install cmake first
+# Upgrade pip and install cmake
 RUN pip install --upgrade pip setuptools wheel && \
-    pip install cmake>=3.5
+    pip install cmake
 
-# Install dlib separately (requires compilation)
-RUN pip install dlib==19.24.2 || \
-    (pip install cmake && pip install dlib==19.24.2)
+# Install dlib first (requires compilation, takes 5-10 minutes)
+RUN pip install dlib==19.24.2
 
 # Install remaining Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt

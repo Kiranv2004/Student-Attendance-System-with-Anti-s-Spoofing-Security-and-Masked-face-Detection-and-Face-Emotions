@@ -1,2 +1,2 @@
-web: bash setup.sh && python fixed_integrated_attendance_system.py
+web: python fixed_integrated_attendance_system.py
 
