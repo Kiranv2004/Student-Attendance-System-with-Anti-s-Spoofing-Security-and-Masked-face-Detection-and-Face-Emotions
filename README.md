@@ -385,31 +385,46 @@ Open browser and go to: **http://127.0.0.1:5000**
 
 The application can be deployed to various platforms. See **[DEPLOYMENT.md](DEPLOYMENT.md)** for detailed deployment guides.
 
+### 🏆 **Recommended Platform: VPS (DigitalOcean/Linode)**
+
+**Best for Production:**
+- ✅ **Optimal Performance** - Handles ML workloads efficiently
+- ✅ **Cost-Effective** - $12-24/month (much cheaper than alternatives)
+- ✅ **Full Control** - 4GB+ RAM, dedicated CPU cores
+- ✅ **Production-Ready** - Stable and reliable
+
+**Why VPS?** This project uses heavy ML libraries (PyTorch, TensorFlow, dlib) that require significant resources. VPS provides dedicated resources at a reasonable cost.
+
 ### Quick Deployment Options:
 
-1. **Railway** (Recommended - Easy & Free Tier)
-   - Connect GitHub repo
+1. **VPS (DigitalOcean/Linode)** ⭐ **RECOMMENDED**
+   - Best performance for ML workloads
+   - $12-24/month (4GB RAM recommended)
+   - Full control and scalability
+   - See [DEPLOYMENT_RECOMMENDATION.md](DEPLOYMENT_RECOMMENDATION.md)
+
+2. **Railway** (For Testing/Development)
+   - Easy setup, free tier available
    - Auto-deploys on push
-   - Free MongoDB included
+   - Good for testing (may need paid tier for production)
 
-2. **Render** (Free Tier Available)
-   - Connect GitHub repo
-   - Automatic deployments
-   - Free MongoDB available
+3. **Render** (Free Tier for Testing)
+   - Simple deployment
+   - Free tier available
+   - Good for demos
 
-3. **Heroku** (Paid - $7/month)
+4. **Heroku** (Paid - $7/month+)
    - Reliable platform
    - Easy MongoDB addon
+   - May need higher tier for ML workloads
 
-4. **Docker** (Any Platform)
+5. **Docker** (Any Platform)
    - Use provided `Dockerfile`
    - Deploy anywhere
 
-5. **VPS** (DigitalOcean, AWS, etc.)
-   - Full control
-   - Best for production
-
-**For detailed instructions, see [DEPLOYMENT.md](DEPLOYMENT.md)**
+**📋 For platform comparison and detailed instructions, see:**
+- **[DEPLOYMENT_RECOMMENDATION.md](DEPLOYMENT_RECOMMENDATION.md)** - Platform comparison and recommendations
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Step-by-step deployment guides
 
 ---
 
