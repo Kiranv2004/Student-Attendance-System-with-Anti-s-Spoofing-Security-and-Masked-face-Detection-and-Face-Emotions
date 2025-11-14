@@ -385,33 +385,46 @@ Open browser and go to: **http://127.0.0.1:5000**
 
 The application can be deployed to various platforms. See **[DEPLOYMENT.md](DEPLOYMENT.md)** for detailed deployment guides.
 
-### 🏆 **Recommended Platform: VPS (DigitalOcean/Linode)**
+### 🏆 **Recommended Platforms:**
 
-**Best for Production:**
+**For FREE Deployment:**
+- 🆓 **Railway (Free Tier)** - Best free option, $5 credit/month, free MongoDB
+- 🆓 **Render (Free Tier)** - Good alternative, free MongoDB included
+- 📖 See **[FREE_DEPLOYMENT.md](FREE_DEPLOYMENT.md)** for free deployment guide
+
+**For Production (Paid):**
+- 💰 **VPS (DigitalOcean/Linode)** - Best performance, $12-24/month
 - ✅ **Optimal Performance** - Handles ML workloads efficiently
-- ✅ **Cost-Effective** - $12-24/month (much cheaper than alternatives)
+- ✅ **Cost-Effective** - Much cheaper than other paid options
 - ✅ **Full Control** - 4GB+ RAM, dedicated CPU cores
 - ✅ **Production-Ready** - Stable and reliable
 
-**Why VPS?** This project uses heavy ML libraries (PyTorch, TensorFlow, dlib) that require significant resources. VPS provides dedicated resources at a reasonable cost.
+**Why VPS for Production?** This project uses heavy ML libraries (PyTorch, TensorFlow, dlib) that require significant resources. VPS provides dedicated resources at a reasonable cost.
 
 ### Quick Deployment Options:
 
-1. **VPS (DigitalOcean/Linode)** ⭐ **RECOMMENDED**
+#### 🆓 **FREE Options:**
+
+1. **Railway (Free Tier)** ⭐ **BEST FREE OPTION**
+   - $5 credit/month (enough for testing)
+   - Free MongoDB included
+   - No spin-down, always-on
+   - Easy GitHub integration
+   - See [FREE_DEPLOYMENT.md](FREE_DEPLOYMENT.md) for step-by-step guide
+
+2. **Render (Free Tier)**
+   - Free tier available
+   - Free MongoDB included
+   - Spins down after 15 min inactivity
+   - Good for demos
+
+#### 💰 **PAID Options (For Production):**
+
+3. **VPS (DigitalOcean/Linode)** ⭐ **BEST FOR PRODUCTION**
    - Best performance for ML workloads
    - $12-24/month (4GB RAM recommended)
    - Full control and scalability
    - See [DEPLOYMENT_RECOMMENDATION.md](DEPLOYMENT_RECOMMENDATION.md)
-
-2. **Railway** (For Testing/Development)
-   - Easy setup, free tier available
-   - Auto-deploys on push
-   - Good for testing (may need paid tier for production)
-
-3. **Render** (Free Tier for Testing)
-   - Simple deployment
-   - Free tier available
-   - Good for demos
 
 4. **Heroku** (Paid - $7/month+)
    - Reliable platform
