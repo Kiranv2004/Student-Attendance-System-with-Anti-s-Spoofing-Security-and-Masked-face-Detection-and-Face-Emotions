@@ -2548,12 +2548,14 @@ if __name__ == '__main__':
                 'error': str(e)
             }), 500
     
-    # Automatically open the web browser
-    threading.Timer(1.0, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
+    # Automatically open the web browser (only in local development)
+    if os.getenv('FLASK_ENV') != 'production' and os.getenv('RAILWAY_ENVIRONMENT') is None:
+        threading.Timer(1.0, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
     
     # Start Flask app
     try:
-        app.run(debug=False, host='0.0.0.0', port=5000)
+        port = int(os.getenv('PORT', 5000))
+        app.run(debug=False, host='0.0.0.0', port=port)
     except Exception as e:
         print(f"Error starting Flask app: {e}")
         import traceback

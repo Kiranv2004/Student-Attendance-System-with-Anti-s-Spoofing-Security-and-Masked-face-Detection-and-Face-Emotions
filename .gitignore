@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
+
+# Debug files
+debug_frames/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# MongoDB
+*.db
+*.sqlite
+
+# Model files (if too large, use Git LFS)
+# face_security/resources/anti_spoof_models/*.pth
+# face_security/resources/detection_model/*.caffemodel
+

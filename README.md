@@ -12,6 +12,7 @@ A comprehensive web-based student attendance system that combines **Face Recogni
 - [Technology Stack](#-technology-stack)
 - [Installation & Setup](#-installation--setup)
 - [Running the Application](#-running-the-application)
+- [Deployment](#-deployment)
 - [Web Pages & Features](#-web-pages--features)
 - [Database Schema](#-database-schema)
 - [Configuration](#-configuration)
@@ -377,6 +378,38 @@ Initializing web face recognition system...
 
 ### Access the Web Interface
 Open browser and go to: **http://127.0.0.1:5000**
+
+---
+
+## 🚀 Deployment
+
+The application can be deployed to various platforms. See **[DEPLOYMENT.md](DEPLOYMENT.md)** for detailed deployment guides.
+
+### Quick Deployment Options:
+
+1. **Railway** (Recommended - Easy & Free Tier)
+   - Connect GitHub repo
+   - Auto-deploys on push
+   - Free MongoDB included
+
+2. **Render** (Free Tier Available)
+   - Connect GitHub repo
+   - Automatic deployments
+   - Free MongoDB available
+
+3. **Heroku** (Paid - $7/month)
+   - Reliable platform
+   - Easy MongoDB addon
+
+4. **Docker** (Any Platform)
+   - Use provided `Dockerfile`
+   - Deploy anywhere
+
+5. **VPS** (DigitalOcean, AWS, etc.)
+   - Full control
+   - Best for production
+
+**For detailed instructions, see [DEPLOYMENT.md](DEPLOYMENT.md)**
 
 ---
 

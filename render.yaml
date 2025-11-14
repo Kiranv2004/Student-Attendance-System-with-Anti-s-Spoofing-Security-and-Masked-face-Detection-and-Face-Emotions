@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: attendance-system
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python fixed_integrated_attendance_system.py
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: SMTP_SERVER
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: FROM_EMAIL
+        sync: false
+      - key: FROM_NAME
+        value: College Attendance System
+      - key: TEACHER_EMAILS
+        sync: false
+
