@@ -382,11 +382,11 @@ logger = logging.getLogger(__name__)
 
 # Email configuration - Update these with your SMTP settings
 EMAIL_CONFIG = {
-    'smtp_server': os.getenv('SMTP_SERVER', 'smtp.gmail.com'),
+    'smtp_server': os.getenv('SMTP_SERVER', 'smtp mail.com'),
     'smtp_port': int(os.getenv('SMTP_PORT', '587')),
-    'smtp_username': os.getenv('SMTP_USERNAME', 'collegeattendance4@gmail.com'),
-    'smtp_password': os.getenv('SMTP_PASSWORD', 'rrun gwlj owjv gqep'),  # Gmail App Password
-    'from_email': os.getenv('FROM_EMAIL', 'collegeattendance4@gmail.com'),
+    'smtp_username': os.getenv('SMTP_USERNAME', 'collegemail@examplemail.com'),
+    'smtp_password': os.getenv('SMTP_PASSWORD', 'Gmail App Password'),  # Gmail App Password
+    'from_email': os.getenv('FROM_EMAIL', 'collegemail@mail.com'),
     'from_name': os.getenv('FROM_NAME', 'College Attendance System'),
     'teacher_emails': os.getenv('TEACHER_EMAILS', 'teacher1@example.com,teacher2@example.com').split(',')
 }
