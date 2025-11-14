@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-# @Time : 20-6-4 下午2:13
-# @Author : zhuying
-# @Company : Minivision
-# @File : utility.py
-# @Software : PyCharm
+"""
+Utility Functions
+Helper functions for model parsing and file operations
+"""
 
 from datetime import datetime
 import os

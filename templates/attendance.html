@@ -375,6 +375,132 @@
         .tight-top {
             margin-top: 0 !important;
         }
+
+        /* Motivational Quotes Box */
+        .motivation-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .motivation-box::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: pulse 4s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+
+        .motivation-box:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .motivation-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .motivation-header i {
+            font-size: 28px;
+            margin-right: 12px;
+            opacity: 0.9;
+        }
+
+        .motivation-header h3 {
+            margin: 0;
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        .motivation-quote {
+            font-size: 18px;
+            line-height: 1.6;
+            font-style: italic;
+            margin: 15px 0;
+            position: relative;
+            z-index: 1;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+        }
+
+        .motivation-quote::before {
+            content: '"';
+            font-size: 60px;
+            line-height: 1;
+            opacity: 0.3;
+            position: absolute;
+            left: -10px;
+            top: -10px;
+            font-family: Georgia, serif;
+        }
+
+        .motivation-author {
+            font-size: 14px;
+            opacity: 0.9;
+            text-align: right;
+            margin-top: 10px;
+            position: relative;
+            z-index: 1;
+            font-weight: 500;
+        }
+
+        .motivation-emotion {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-left: 10px;
+            text-transform: capitalize;
+        }
+
+        .motivation-box.happy {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        .motivation-box.sad {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+
+        .motivation-box.angry {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        }
+
+        .motivation-box.surprise {
+            background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);
+        }
+
+        .motivation-box.fear {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+
+        .motivation-box.disgust {
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+        }
+
+        .motivation-box.neutral {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
     </style>
 </head>
 
@@ -431,6 +557,19 @@
             
             <!-- Attendance Status Section -->
             <div class="col-lg-5 mb-4">
+                <!-- Motivational Quotes Box -->
+                <div class="motivation-box neutral" id="motivation-box" style="display: none;">
+                    <div class="motivation-header">
+                        <i class="fas fa-lightbulb"></i>
+                        <h3>Daily Motivation</h3>
+                        <span class="motivation-emotion" id="motivation-emotion">Neutral</span>
+                    </div>
+                    <div class="motivation-quote" id="motivation-quote">
+                        Welcome! Your emotion will be detected and a personalized quote will appear here.
+                    </div>
+                    <div class="motivation-author" id="motivation-author"></div>
+                </div>
+
                 <div class="content-container">
                     <h2 class="section-title">
                         <i class="fas fa-chart-bar"></i> Attendance Status
@@ -477,6 +616,22 @@
             </div>
         </div>
         
+        <!-- Today's Attendance List Section -->
+        <div class="row">
+            <div class="col-12 mb-4">
+                <div class="content-container">
+                    <h2 class="section-title">
+                        <i class="fas fa-list-check"></i> Today's Attendance List
+                        <small class="text-muted ms-2" id="last-updated" style="font-size: 14px; font-weight: normal;"></small>
+                    </h2>
+                    
+                    <div id="todays-attendance-list">
+                        <p class="text-center text-muted">Loading today's attendance...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- Live Detection Results Section - Moved below camera feed -->
         <div class="row justify-content-end">
             <div class="col-12 col-lg-6 mb-1 live-detection-box">
@@ -512,6 +667,97 @@
         const todaysAttendance = document.getElementById('todays-attendance');
         const systemStatus = document.getElementById('system-status');
         const detectionResults = document.getElementById('detection-results');
+        const motivationBox = document.getElementById('motivation-box');
+        const motivationQuote = document.getElementById('motivation-quote');
+        const motivationAuthor = document.getElementById('motivation-author');
+        const motivationEmotion = document.getElementById('motivation-emotion');
+
+        // Motivational quotes for each emotion
+        const motivationQuotes = {
+            happy: [
+                { quote: "Your smile is contagious! Keep spreading that positive energy and watch how it transforms your day and those around you.", author: "Anonymous" },
+                { quote: "Happiness is not something ready made. It comes from your own actions. Keep doing what makes you happy!", author: "Dalai Lama" },
+                { quote: "The joy you feel today is the strength you have for tomorrow. Embrace this moment!", author: "Anonymous" },
+                { quote: "Your positive attitude is your greatest asset. Keep shining bright!", author: "Anonymous" },
+                { quote: "Success is not the key to happiness. Happiness is the key to success. You're on the right track!", author: "Albert Schweitzer" }
+            ],
+            sad: [
+                { quote: "It's okay to feel down sometimes. Remember, even the darkest nights end with a sunrise. You've got this!", author: "Anonymous" },
+                { quote: "Tough times don't last, but tough people do. You are stronger than you think.", author: "Robert H. Schuller" },
+                { quote: "Every storm runs out of rain. Keep moving forward, better days are ahead.", author: "Maya Angelou" },
+                { quote: "You are not alone in this. Reach out, talk to someone, and remember that this feeling will pass.", author: "Anonymous" },
+                { quote: "The comeback is always stronger than the setback. Your resilience will carry you through.", author: "Anonymous" }
+            ],
+            angry: [
+                { quote: "Take a deep breath. Channel this energy into something positive. You have the power to transform frustration into motivation.", author: "Anonymous" },
+                { quote: "Anger is an energy. Use it to fuel positive change rather than destructive actions.", author: "Anonymous" },
+                { quote: "In the middle of difficulty lies opportunity. Turn this moment into a stepping stone for growth.", author: "Albert Einstein" },
+                { quote: "Calm mind brings inner strength and self-confidence. Take a moment to center yourself.", author: "Dalai Lama" },
+                { quote: "Your reaction to challenges defines your character. Choose to respond with wisdom and strength.", author: "Anonymous" }
+            ],
+            surprise: [
+                { quote: "Life is full of surprises! Embrace the unexpected and see it as an opportunity for growth and adventure.", author: "Anonymous" },
+                { quote: "The best things in life are often unexpected. Stay open to new possibilities!", author: "Anonymous" },
+                { quote: "Surprises keep life interesting. Welcome them with curiosity and an open heart.", author: "Anonymous" },
+                { quote: "Every surprise is a chance to learn something new about yourself and the world around you.", author: "Anonymous" },
+                { quote: "Stay curious! The most beautiful moments often come when we least expect them.", author: "Anonymous" }
+            ],
+            fear: [
+                { quote: "Courage is not the absence of fear, but the decision that something else is more important. You are braver than you believe.", author: "Winston Churchill" },
+                { quote: "Feel the fear and do it anyway. Growth happens outside your comfort zone.", author: "Susan Jeffers" },
+                { quote: "Fear is just a feeling. It doesn't have the power to stop you unless you let it. Keep moving forward!", author: "Anonymous" },
+                { quote: "You have survived 100% of your worst days. You've got this!", author: "Anonymous" },
+                { quote: "The only way to overcome fear is to face it. You are stronger than your fears.", author: "Anonymous" }
+            ],
+            disgust: [
+                { quote: "Sometimes we need to step back and refocus. Use this moment to realign with what truly matters to you.", author: "Anonymous" },
+                { quote: "Negative feelings can be signals for change. Listen to what they're telling you and make positive adjustments.", author: "Anonymous" },
+                { quote: "Turn your dissatisfaction into determination. What can you change today to make things better?", author: "Anonymous" },
+                { quote: "Every challenge is an opportunity in disguise. Look for the lesson and the growth.", author: "Anonymous" },
+                { quote: "You have the power to change your perspective. Focus on what you can control and let go of the rest.", author: "Anonymous" }
+            ],
+            neutral: [
+                { quote: "Every day is a fresh start. Take a moment to set your intentions and make today count!", author: "Anonymous" },
+                { quote: "Small steps every day lead to big achievements. Keep moving forward, one step at a time.", author: "Anonymous" },
+                { quote: "Balance is key. Take time to breathe, reflect, and appreciate the present moment.", author: "Anonymous" },
+                { quote: "You are exactly where you need to be. Trust the process and keep going.", author: "Anonymous" },
+                { quote: "Consistency beats perfection. Show up every day and give your best effort.", author: "Anonymous" }
+            ]
+        };
+
+        // Function to get a random quote for an emotion
+        function getMotivationalQuote(emotion) {
+            const emotionKey = emotion ? emotion.toLowerCase() : 'neutral';
+            const quotes = motivationQuotes[emotionKey] || motivationQuotes.neutral;
+            const randomIndex = Math.floor(Math.random() * quotes.length);
+            return quotes[randomIndex];
+        }
+
+        // Function to update motivation box
+        function updateMotivationBox(emotion) {
+            if (!emotion) {
+                motivationBox.style.display = 'none';
+                return;
+            }
+
+            const emotionKey = emotion.toLowerCase();
+            const quoteData = getMotivationalQuote(emotion);
+            
+            // Update emotion label
+            motivationEmotion.textContent = emotion.charAt(0).toUpperCase() + emotion.slice(1);
+            
+            // Update quote
+            motivationQuote.textContent = quoteData.quote;
+            
+            // Update author
+            motivationAuthor.textContent = `— ${quoteData.author}`;
+            
+            // Update box class for styling
+            motivationBox.className = 'motivation-box ' + emotionKey;
+            
+            // Show the box
+            motivationBox.style.display = 'block';
+        }
         
         // Load initial data
         loadAttendanceStats();
@@ -541,6 +787,9 @@
                 systemStatus.style.backgroundColor = '#f0fdf4';
                 systemStatus.style.color = '#10b981';
                 systemStatus.innerHTML = '<i class="fas fa-check-circle me-2"></i>System active and scanning for faces';
+                
+                // Show motivation box with neutral quote when camera starts
+                updateMotivationBox('neutral');
                 
             } catch (err) {
                 console.error('Error accessing camera:', err);
@@ -572,10 +821,13 @@
                 autoAttendanceInterval = null;
             }
             
-            // Update system status
-            systemStatus.style.backgroundColor = '#fee2e2';
-            systemStatus.style.color = '#ef4444';
-            systemStatus.innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i>Camera stopped - attendance marking inactive';
+                // Update system status
+                systemStatus.style.backgroundColor = '#fee2e2';
+                systemStatus.style.color = '#ef4444';
+                systemStatus.innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i>Camera stopped - attendance marking inactive';
+                
+                // Hide motivation box when camera stops
+                motivationBox.style.display = 'none';
         });
         
         // Auto attendance process
@@ -702,6 +954,13 @@
                         
                         // Update detection results
                         updateDetectionResults(data);
+                        
+                        // Update motivation box with detected emotion
+                        if (data.faces && data.faces.length > 0 && data.faces[0].emotion) {
+                            updateMotivationBox(data.faces[0].emotion);
+                        } else {
+                            motivationBox.style.display = 'none';
+                        }
                         
                         // Update camera status
                         cameraStatusText.textContent = data.faces && data.faces.length > 0 ? 
@@ -916,6 +1175,62 @@
                 console.error('Error loading attendance stats:', error);
             });
         }
+
+        // Load today's attendance list
+        function loadTodaysAttendanceList() {
+            fetch('/get_todays_attendance_list')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const listContainer = document.getElementById('todays-attendance-list');
+                    const lastUpdated = document.getElementById('last-updated');
+                    
+                    if (lastUpdated) {
+                        lastUpdated.textContent = `(Last updated: ${data.last_updated})`;
+                    }
+                    
+                    if (data.attendance && data.attendance.length > 0) {
+                        let html = '<div class="table-responsive"><table class="table table-striped table-hover">';
+                        html += '<thead><tr><th>#</th><th>Student ID</th><th>Name</th><th>Time</th><th>Subject</th><th>Emotion</th></tr></thead><tbody>';
+                        
+                        data.attendance.forEach((record, index) => {
+                            html += `<tr>
+                                <td>${index + 1}</td>
+                                <td><strong>${record.student_id}</strong></td>
+                                <td>${record.student_name}</td>
+                                <td>${record.time}</td>
+                                <td>${record.subject}</td>
+                                <td><span class="badge bg-info">${record.emotion}</span></td>
+                            </tr>`;
+                        });
+                        
+                        html += '</tbody></table></div>';
+                        html += `<p class="text-muted mt-2"><strong>Total: ${data.count} students marked present today</strong></p>`;
+                        listContainer.innerHTML = html;
+                    } else {
+                        listContainer.innerHTML = '<div class="alert alert-info"><i class="fas fa-info-circle me-2"></i>No attendance marked yet today.</div>';
+                    }
+                } else {
+                    console.error('Error loading today\'s attendance:', data.error);
+                    document.getElementById('todays-attendance-list').innerHTML = 
+                        '<div class="alert alert-warning">Error loading attendance data</div>';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading today\'s attendance list:', error);
+                document.getElementById('todays-attendance-list').innerHTML = 
+                    '<div class="alert alert-danger">Error loading attendance data</div>';
+            });
+        }
+
+        // Auto-refresh attendance stats and list every second
+        setInterval(function() {
+            loadAttendanceStats();
+            loadTodaysAttendanceList();
+        }, 1000); // Refresh every 1 second
+        
+        // Load initial data
+        loadTodaysAttendanceList();
     </script>
 </body>
 </html>

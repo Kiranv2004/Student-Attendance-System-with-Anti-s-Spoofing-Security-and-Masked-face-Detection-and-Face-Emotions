@@ -1,11 +1,7 @@
 # -*- coding: utf-8 -*-
-# @Time : 20-6-9 下午3:06
-# @Author : zhuying
-# @Company : Minivision
-# @File : test.py
-# @Software : PyCharm
 """
-Create patch from original input image by using bbox coordinate
+Image Cropping Utility
+Creates patches from original input images using bounding box coordinates
 """
 
 import cv2

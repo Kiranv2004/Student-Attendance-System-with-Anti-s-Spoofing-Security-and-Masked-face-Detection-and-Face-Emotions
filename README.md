@@ -35,15 +35,18 @@ This project is a **Flask-based web application** that automates student attenda
 ## ✨ Key Features
 
 ### 🔐 Security & Authentication
-- **Silent-Face-Anti-Spoofing**: Detects fake faces (photos, videos, masks) using deep learning models
+- **Face Security Module**: Detects fake faces (photos, videos, masks) using deep learning models
 - **Multi-Model Verification**: Uses multiple anti-spoofing models for higher accuracy
 - **Liveness Detection**: Real-time verification that prevents presentation attacks
 
 ### 👤 Face Recognition
 - **128-Dimensional Face Encodings**: Using the `face_recognition` library (based on dlib)
+- **Masked Face Support**: Automatic masked face encoding generation during registration
+- **Upper Face Detection**: MediaPipe integration for improved masked face recognition
 - **Configurable Thresholds**: Adjustable tolerance for recognition accuracy
 - **Multiple Face Detection**: Can detect and recognize multiple students simultaneously
 - **Optimized Recognition**: Uses HOG (Histogram of Oriented Gradients) for fast detection
+- **Auto-Sync**: Automatic database synchronization when students are added/removed
 
 ### 😊 Emotion Detection
 - **DeepFace Integration**: Advanced emotion analysis using deep learning
@@ -56,6 +59,12 @@ This project is a **Flask-based web application** that automates student attenda
 - **Date-based Filtering**: Search attendance by date range, student, or department
 - **Visual Reports**: Charts and graphs for attendance patterns
 - **CSV Export**: Download attendance records for external analysis
+
+### 📧 Email Notifications
+- **Attendance Confirmation**: Automatic email sent to students when attendance is marked
+- **Daily Summary Reports**: Teachers receive daily attendance summaries via email
+- **Configurable SMTP**: Support for Gmail and other SMTP servers
+- **Email Templates**: Professional HTML email templates with attendance details
 
 ---
 
@@ -89,8 +98,8 @@ This project is a **Flask-based web application** that automates student attenda
 ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
 │Face Recognition│ Anti-Spoofing│  │Emotion      │
 │                │               │  │Detection    │
-│face_recognition│Silent-Face-   │  │             │
-│library         │Anti-Spoofing  │  │DeepFace     │
+│face_recognition│Face Security  │  │             │
+│library         │Module         │  │DeepFace     │
 │(dlib-based)    │(PyTorch CNN)  │  │(Keras/TF)   │
 │                │               │  │             │
 │• 128D encodings│• 2 models     │  │• 7 emotions │
@@ -144,12 +153,13 @@ Camera Feed → Frame Capture → Face Detection → Anti-Spoofing Check
 - OpenCV captures webcam frames (JavaScript → Canvas → Base64 → Flask)
 - `face_recognition.face_locations()` finds face bounding boxes
 - Uses HOG (Histogram of Oriented Gradients) algorithm
+- MediaPipe fallback for masked faces or when standard detection fails
 - Returns coordinates: (top, right, bottom, left)
 
 **B. Anti-Spoofing Verification**
 - Crops face region from frame
 - Patches generated (80x80 pixels) for each face
-- Silent-Face-Anti-Spoofing models predict:
+- Face Security Module models predict:
   - **Label 0**: Fake (photo/video)
   - **Label 1**: Real (live person)
   - **Label 2**: Spoof (advanced attack)
@@ -161,9 +171,10 @@ Camera Feed → Frame Capture → Face Detection → Anti-Spoofing Check
 
 **C. Face Recognition** (Only if anti-spoofing passes)
 - Extract face encoding from detected face
-- Compare with all stored encodings in database
+- For masked faces: Uses upper face region encoding or masked-specific encodings
+- Compare with all stored encodings in database (normal and masked variants)
 - Calculate face distance using Euclidean distance
-- Match threshold: 0.6 (lower = stricter)
+- Match threshold: 0.6 for normal faces, 1.2 for masked faces (more lenient)
 - Returns: Student ID, Name, Confidence score
 
 **D. Emotion Detection** (Optional, if DeepFace available)
@@ -192,6 +203,8 @@ Camera Feed → Frame Capture → Face Detection → Anti-Spoofing Check
     "anti_spoof_score": 0.92
   }
   ```
+- Send attendance confirmation email to student (if email configured)
+- Auto-sync face encodings when database changes are detected
 
 #### 3️⃣ **Analytics & Reporting**
 ```
@@ -223,21 +236,28 @@ Database Query → Filter by Date/Student/Department
    - Based on dlib's deep learning face recognition
    - 99.38% accuracy on LFW benchmark
    
-2. **Silent-Face-Anti-Spoofing** (Custom)
+2. **Face Security Module** (Custom)
    - PyTorch-based CNNs (MiniFASNet architectures)
    - Trained on OULU-NPU, SiW, CASIA-FASD datasets
+   - Integrated anti-spoofing detection system
    
 3. **DeepFace** (v0.0.75+)
    - Multiple backend support (Keras, TensorFlow, PyTorch)
    - FER2013 emotion model (7 emotions)
 
-4. **OpenCV** (`cv2` v4.5+)
+4. **MediaPipe** (v0.10.8+)
+   - Enhanced face detection for masked faces
+   - Upper face region extraction
+   - Fallback detection method
+
+5. **OpenCV** (`cv2` v4.5+)
    - Image processing
    - Video capture
    - Face preprocessing
 
-5. **NumPy**: Array operations
-6. **SciPy**: Distance calculations
+6. **NumPy**: Array operations
+7. **SciPy**: Distance calculations
+8. **smtplib**: Email notifications (built-in Python library)
 
 ### Database
 - **MongoDB 4.x+**: NoSQL database
@@ -275,14 +295,14 @@ python -m venv venv
 
 ### Step 3: Install Dependencies
 
-**Install Silent-Face-Anti-Spoofing requirements:**
+**Install all project requirements:**
 ```powershell
-pip install -r Silent-Face-Anti-Spoofing\requirements.txt
+pip install -r requirements.txt
 ```
 
-**Install main project requirements:**
+**Or install manually:**
 ```powershell
-pip install flask flask-compress pymongo face_recognition opencv-python numpy scipy pandas matplotlib deepface
+pip install flask flask-compress pymongo face_recognition opencv-python numpy scipy pandas matplotlib deepface mediapipe torch torchvision
 ```
 
 **Optional (for GPU acceleration):**
@@ -309,7 +329,7 @@ mongo --eval "db.version()"
 
 Ensure these files exist:
 ```
-Silent-Face-Anti-Spoofing/
+face_security/
   resources/
     anti_spoof_models/
       ✅ 2.7_80x80_MiniFASNetV2.pth
@@ -319,7 +339,7 @@ Silent-Face-Anti-Spoofing/
       ✅ Widerface-RetinaFace.caffemodel
 ```
 
-If missing, download from: [Silent-Face-Anti-Spoofing repository](https://github.com/minivision-ai/Silent-Face-Anti-Spoofing)
+**Note:** The `face_security` module is a custom integration for this project. The model files should already be present in the `face_security/resources/` directory.
 
 ---
 
@@ -333,11 +353,25 @@ python fixed_integrated_attendance_system.py
 **Output should show:**
 ```
 ✅ DeepFace available for emotion detection
-✅ Silent-Face-Anti-Spoofing system available
+✅ Face security module available
+✅ MediaPipe available for enhanced face detection
+============================================================
+EMAIL CONFIGURATION STATUS
+============================================================
+SMTP Server: smtp.gmail.com:587
+From Email: collegeattendance4@gmail.com
+Email configured: ✅ Ready to send emails
+⚠️  GMAIL SENDING LIMITS:
+   - Standard Gmail: 500 emails per day (rolling 24-hour period)
+   - Google Workspace: 2,000 emails per day
+============================================================
 Connecting to MongoDB...
 MongoDB connection successful
 Found 15 students in database
-✅ Successfully loaded 15 face encodings
+✅ Successfully loaded 15 face encodings (12 normal, 12 masked)
+🚀 Initializing face security system...
+✅ Face security system initialized successfully
+Initializing web face recognition system...
  * Running on http://127.0.0.1:5000
 ```
 
@@ -533,7 +567,8 @@ attendance_records = db.attendance.find(filters).sort('date', -1)
   "section": "A",
   "email": "john@example.com",
   "phone": "9876543210",
-  "face_encoding": [0.123, -0.456, ...],  // 128 floats
+  "face_encoding": [0.123, -0.456, ...],  // 128 floats (normal face)
+  "face_encoding_masked": [0.234, -0.567, ...],  // 128 floats (masked face)
   "image_id": ObjectId("..."),  // GridFS reference
   "registered_at": ISODate("2025-10-30T10:30:00Z"),
   "active": true
@@ -592,6 +627,29 @@ client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000
 db = client.attendance_system
 ```
 
+### Email Configuration
+```python
+# Set environment variables or update EMAIL_CONFIG in code
+EMAIL_CONFIG = {
+    'smtp_server': 'smtp.gmail.com',
+    'smtp_port': 587,
+    'smtp_username': 'your_email@gmail.com',
+    'smtp_password': 'your_app_password',  # Gmail App Password
+    'from_email': 'your_email@gmail.com',
+    'from_name': 'College Attendance System',
+    'teacher_emails': ['teacher1@example.com', 'teacher2@example.com']
+}
+```
+
+**Gmail Setup:**
+1. Enable 2-Factor Authentication
+2. Generate App Password: https://myaccount.google.com/apppasswords
+3. Use the App Password (not your regular password) in `smtp_password`
+
+**Email Limits:**
+- Standard Gmail: 500 emails per day
+- Google Workspace: 2,000 emails per day
+
 ### Flask Configuration
 ```python
 app.config['SECRET_KEY'] = 'your-secret-key-here'  # Change for production
@@ -625,7 +683,7 @@ net start MongoDB
 **Solutions:**
 - Check lighting conditions (avoid too bright/dark)
 - Lower threshold to 0.25 or 0.2
-- Ensure `.pth` model files exist in `Silent-Face-Anti-Spoofing/resources/`
+- Ensure `.pth` model files exist in `face_security/resources/anti_spoof_models/`
 - Use a better quality webcam
 
 ### Issue: "DeepFace emotion detection error"
@@ -649,6 +707,21 @@ pip install face_recognition
 
 ### Issue: "Duplicate attendance marked"
 **Solution:** System already handles this - checks if student marked today before saving.
+
+### Issue: "Email not sending"
+**Solutions:**
+- Verify SMTP credentials are correct
+- For Gmail, use App Password (not regular password)
+- Check firewall/network allows SMTP connections (port 587)
+- Verify email addresses in database are valid
+- Check console logs for detailed error messages
+
+### Issue: "Masked faces not detected"
+**Solutions:**
+- Ensure `face_encoding_masked` is created during registration
+- Check MediaPipe is installed: `pip install mediapipe`
+- Verify upper face encoding is being used for masked detection
+- Adjust `masked_max_distance` threshold if needed (default: 1.2)
 
 ### Issue: "High memory usage"
 **Solution:**
@@ -703,8 +776,12 @@ pip install face_recognition
 
 ## 📝 Future Enhancements
 
+- [x] Email notifications for attendance confirmation
+- [x] Daily attendance summary emails to teachers
+- [x] Masked face detection and recognition
+- [x] Auto-sync database changes
 - [ ] Add admin authentication/login system
-- [ ] SMS/Email notifications for attendance
+- [ ] SMS notifications (in addition to email)
 - [ ] Mobile app (React Native/Flutter)
 - [ ] Attendance reports generation (PDF)
 - [ ] Integration with Learning Management Systems (LMS)
@@ -714,18 +791,43 @@ pip install face_recognition
 
 ---
 
+## 📁 Project Structure
+
+```
+StudentAttendanceSystem/
+├── face_security/              # Face Security Module (Anti-Spoofing)
+│   ├── resources/
+│   │   ├── anti_spoof_models/  # PyTorch model files (.pth)
+│   │   └── detection_model/    # RetinaFace detection models
+│   └── src/
+│       ├── anti_spoof_predict.py
+│       ├── generate_patches.py
+│       ├── utility.py
+│       ├── data_io/            # Data transformation utilities
+│       └── model_lib/          # Neural network models
+├── src/                        # Source utilities (optional)
+├── templates/
+│   ├── dashboard.html          # Home page
+│   ├── registration.html       # Student registration
+│   ├── attendance.html         # Attendance capture
+│   └── analytics.html          # Reports & analytics
+├── fixed_integrated_attendance_system.py  # Main application
+├── requirements.txt            # Python dependencies
+└── README.md                   # This file
+```
+
 ## 👨‍💻 Developer Information
 
 **Repository:** https://github.com/Kiranv2004/StudentAttendanceSystem  
 **Developer:** Kiran V  
-**Last Updated:** October 30, 2025
+**Last Updated:** November 2025
 
 ---
 
 ## 📄 License
 
 This project is for educational purposes. Please respect the licenses of all included libraries:
-- Silent-Face-Anti-Spoofing: [Original License](https://github.com/minivision-ai/Silent-Face-Anti-Spoofing)
+- Face Security Module: Custom integration based on PyTorch CNNs
 - face_recognition: MIT License
 - DeepFace: MIT License
 
@@ -733,7 +835,8 @@ This project is for educational purposes. Please respect the licenses of all inc
 
 ## 🙏 Acknowledgments
 
-- **Silent-Face-Anti-Spoofing** by Minivision AI
+- **Face Security Module**: Custom anti-spoofing integration for this project
+- Original anti-spoofing concepts inspired by Minivision AI's work
 - **face_recognition** by Adam Geitgey
 - **DeepFace** by Sefik Ilkin Serengil
 - Bootstrap & Font Awesome for UI components

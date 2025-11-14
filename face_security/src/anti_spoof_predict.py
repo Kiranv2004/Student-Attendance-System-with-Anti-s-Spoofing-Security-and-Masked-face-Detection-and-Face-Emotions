@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-# @Time : 20-6-9 上午10:20
-# @Author : zhuying
-# @Company : Minivision
-# @File : anti_spoof_predict.py
-# @Software : PyCharm
+"""
+Face Anti-Spoofing Detection Module
+Detects real vs fake faces using deep learning models
+"""
 
 import os
 import cv2
@@ -26,11 +25,32 @@ MODEL_MAPPING = {
 
 
 class Detection:
-    def __init__(self):
-        caffemodel = "./resources/detection_model/Widerface-RetinaFace.caffemodel"
-        deploy = "./resources/detection_model/deploy.prototxt"
+    def __init__(self, base_dir=None):
+        """
+        Initialize face detection with RetinaFace model
+        
+        Args:
+            base_dir: Base directory of face_security module. If None, will auto-detect.
+        """
+        if base_dir is None:
+            # Auto-detect base directory (face_security folder)
+            current_file = os.path.abspath(__file__)
+            # Go up from src/anti_spoof_predict.py to face_security/
+            base_dir = os.path.dirname(os.path.dirname(current_file))
+        
+        detection_model_dir = os.path.join(base_dir, "resources", "detection_model")
+        caffemodel = os.path.join(detection_model_dir, "Widerface-RetinaFace.caffemodel")
+        deploy = os.path.join(detection_model_dir, "deploy.prototxt")
+        
+        if not os.path.exists(caffemodel) or not os.path.exists(deploy):
+            raise FileNotFoundError(
+                f"Detection model files not found in {detection_model_dir}. "
+                f"Please ensure Widerface-RetinaFace.caffemodel and deploy.prototxt are present."
+            )
+        
         self.detector = cv2.dnn.readNetFromCaffe(deploy, caffemodel)
         self.detector_confidence = 0.6
+        self.base_dir = base_dir
 
     def get_bbox(self, img):
         height, width = img.shape[0], img.shape[1]
@@ -51,12 +71,32 @@ class Detection:
 
 
 class AntiSpoofPredict(Detection):
-    def __init__(self, device_id):
-        super(AntiSpoofPredict, self).__init__()
+    def __init__(self, device_id, base_dir=None):
+        """
+        Initialize anti-spoofing predictor
+        
+        Args:
+            device_id: CUDA device ID (or 0 for CPU)
+            base_dir: Base directory of face_security module. If None, will auto-detect.
+        """
+        super(AntiSpoofPredict, self).__init__(base_dir=base_dir)
         self.device = torch.device("cuda:{}".format(device_id)
                                    if torch.cuda.is_available() else "cpu")
 
     def _load_model(self, model_path):
+        """
+        Load anti-spoofing model from file
+        
+        Args:
+            model_path: Path to model file (.pth). Can be relative or absolute.
+        """
+        # If model_path is relative, resolve it relative to base_dir
+        if not os.path.isabs(model_path):
+            model_path = os.path.join(self.base_dir, "resources", "anti_spoof_models", model_path)
+        
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
         # define model
         model_name = os.path.basename(model_path)
         h_input, w_input, model_type, _ = parse_model_name(model_name)
@@ -90,14 +130,6 @@ class AntiSpoofPredict(Detection):
             result = self.model.forward(img)
             result = F.softmax(result).cpu().numpy()
         return result
-
-
-
-
-
-
-
-
 
 
 
