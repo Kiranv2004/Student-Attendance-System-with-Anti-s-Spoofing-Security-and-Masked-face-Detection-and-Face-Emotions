@@ -3,18 +3,16 @@ services:
     name: student-attendance-system
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn fixed_integrated_attendance_system:app --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120
+    startCommand: python fixed_integrated_attendance_system.py
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.9.13
+      - key: PORT
+        generateValue: true
       - key: MONGODB_URI
         sync: false
-      - key: SECRET_KEY
-        generateValue: true
       - key: SMTP_SERVER
         value: smtp.gmail.com
       - key: SMTP_PORT
-        value: 587
+        value: "587"
       - key: SMTP_USERNAME
         sync: false
       - key: SMTP_PASSWORD
@@ -25,4 +23,8 @@ services:
         value: College Attendance System
       - key: TEACHER_EMAILS
         sync: false
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
 

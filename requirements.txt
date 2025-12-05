@@ -41,6 +41,3 @@ python-dateutil==2.8.2
 
 # Email
 flask-mail==0.9.1
-
-# Production Server
-gunicorn==21.2.0

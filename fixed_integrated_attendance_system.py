@@ -25,13 +25,6 @@ from pymongo.database import Database
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import logging
-
-# MongoDB connection helper function
-def get_mongodb_client():
-    """Get MongoDB client with connection string from environment variable"""
-    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-    server_timeout = int(os.getenv('MONGODB_TIMEOUT', '5000'))
-    return MongoClient(mongodb_uri, serverSelectionTimeoutMS=server_timeout)
 import threading
 import webbrowser
 from PIL import Image
@@ -497,11 +490,11 @@ logger = logging.getLogger(__name__)
 EMAIL_CONFIG = {
     'smtp_server': os.getenv('SMTP_SERVER', 'smtp.gmail.com'),
     'smtp_port': int(os.getenv('SMTP_PORT', '587')),
-    'smtp_username': os.getenv('SMTP_USERNAME', ''),
-    'smtp_password': os.getenv('SMTP_PASSWORD', ''),  # Gmail App Password - Set via environment variable
-    'from_email': os.getenv('FROM_EMAIL', ''),
+    'smtp_username': os.getenv('SMTP_USERNAME', 'collegeattendance4@gmail.com'),
+    'smtp_password': os.getenv('SMTP_PASSWORD', 'rrun gwlj owjv gqep'),  # Gmail App Password
+    'from_email': os.getenv('FROM_EMAIL', 'collegeattendance4@gmail.com'),
     'from_name': os.getenv('FROM_NAME', 'College Attendance System'),
-    'teacher_emails': os.getenv('TEACHER_EMAILS', '').split(',') if os.getenv('TEACHER_EMAILS') else []
+    'teacher_emails': os.getenv('TEACHER_EMAILS', 'teacher1@example.com,teacher2@example.com').split(',')
 }
 
 # Print email configuration status on startup
@@ -1013,7 +1006,8 @@ class FixedWebFaceRecognition:
         try:
             print("Connecting to MongoDB...")
             # Try to connect to MongoDB
-            client = get_mongodb_client()
+            mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+            client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
             db = client.attendance_system
             students_collection = db.students
             
@@ -1868,7 +1862,8 @@ class FixedWebAttendanceSystem:
 
     def _compute_student_signature(self):
         """Compute a hash signature of current student records for auto-sync"""
-        client = get_mongodb_client()
+        mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
         db = client.attendance_system
         students = list(db.students.find({}, {
             'usn': 1,
@@ -1920,7 +1915,8 @@ class Student:
     def count(cls):
         """Count total students"""
         try:
-            client = get_mongodb_client()
+            mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+            client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
             db = client.attendance_system
             count = db.students.count_documents({})
             client.close()
@@ -1932,7 +1928,8 @@ class Student:
     def get_department_counts(cls):
         """Get department counts"""
         try:
-            client = get_mongodb_client()
+            mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+            client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
             db = client.attendance_system
             pipeline = [
                 {"$group": {"_id": "$department", "count": {"$sum": 1}}}
@@ -1954,7 +1951,8 @@ class Attendance:
     def get_today_count(cls):
         """Get today's attendance count"""
         try:
-            client = get_mongodb_client()
+            mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+            client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
             db = client.attendance_system
             today = datetime.now().strftime('%Y-%m-%d')
             count = db.attendance.count_documents({'date': today})
@@ -1986,7 +1984,8 @@ class Attendance:
     def save(self):
         """Save attendance record"""
         try:
-            client = get_mongodb_client()
+            mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+            client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
             db = client.attendance_system
             result = db.attendance.insert_one(self)
             client.close()
@@ -2001,7 +2000,7 @@ class Attendance:
 
 # Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY', 'student_attendance_system_secret_key_change_in_production')
+app.secret_key = 'student_attendance_system_secret_key'
 
 # Initialize compression
 compress = Compress()
@@ -2067,7 +2066,8 @@ def get_attendance_stats():
     """Get attendance statistics for the dashboard - FRESH DATA (no cache)"""
     try:
         # Force fresh database connection
-        client = get_mongodb_client()
+        mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
         db = client.attendance_system
         
         # Get fresh counts
@@ -2105,7 +2105,8 @@ def get_attendance_stats():
 def get_todays_attendance_list():
     """Get today's attendance list with student names - FRESH DATA (no cache)"""
     try:
-        client = get_mongodb_client()
+        mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
         db = client.attendance_system
         
         today = datetime.now().strftime('%Y-%m-%d')
@@ -2151,7 +2152,8 @@ def get_todays_attendance_list():
 def test_database_connection():
     """Test endpoint to verify database connection and check attendance records"""
     try:
-        client = get_mongodb_client()
+        mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
         db = client.attendance_system
         
         # Test connection
@@ -2272,7 +2274,8 @@ def process_attendance():
         
         # Check today's attendance records for already marked students
         try:
-            client = get_mongodb_client()
+            mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+            client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
             db = client.attendance_system
             today_records = list(db.attendance.find({'date': today}))
             for record in today_records:
@@ -2452,7 +2455,8 @@ def process_attendance():
                         print(f"📝 Marking attendance for {student_name} (ID: {student_id})")
                         
                         # Get student details from database
-                        client = get_mongodb_client()
+                        mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+                        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
                         db = client.attendance_system
                         
                         try:
@@ -2730,7 +2734,8 @@ def registration():
 
             # Save to MongoDB
             try:
-                client = get_mongodb_client()
+                mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+                client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
                 db = client.attendance_system
                 
                 # Create student document
@@ -2838,7 +2843,8 @@ def get_attendance():
         section_filter = request.args.get('section')
         
         # Connect to MongoDB
-        client = get_mongodb_client()
+        mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
         db = client.attendance_system
         
         # Build query
@@ -2916,7 +2922,8 @@ def generate_daily_summary():
         today = datetime.now().date()
         today_str = today.strftime('%Y-%m-%d')
         
-        client = get_mongodb_client()
+        mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+        client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
         db = client.attendance_system
         
         # Get all attendance records for today
@@ -3064,8 +3071,10 @@ if __name__ == '__main__':
         print(f"✅ Flask app starting on port {port}")
         print(f"🌐 Access the web UI at {local_url}")
         
-        # Automatically open browser for local development
-        if os.getenv('FLASK_ENV') != 'production' and os.getenv('RAILWAY_ENVIRONMENT') is None:
+        # Automatically open browser for local development (skip in production/Render)
+        if (os.getenv('FLASK_ENV') != 'production' and 
+            os.getenv('RAILWAY_ENVIRONMENT') is None and 
+            os.getenv('RENDER') is None):
             def open_browser():
                 print(f"🖥️ Opening browser at {local_url}")
                 webbrowser.open(local_url)
