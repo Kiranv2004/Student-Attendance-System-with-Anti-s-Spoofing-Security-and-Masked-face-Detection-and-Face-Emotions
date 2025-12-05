@@ -21,8 +21,8 @@ face-recognition-models==0.3.0
 dlib==19.24.2
 
 # Deep Learning & ML
-torch==2.0.1
-torchvision==0.15.2
+torch>=2.5.0
+torchvision>=0.20.0
 
 # Emotion Detection
 deepface==0.0.79
