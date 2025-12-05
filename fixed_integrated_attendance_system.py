@@ -25,6 +25,13 @@ from pymongo.database import Database
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import logging
+
+# MongoDB connection helper function
+def get_mongodb_client():
+    """Get MongoDB client with connection string from environment variable"""
+    mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+    server_timeout = int(os.getenv('MONGODB_TIMEOUT', '5000'))
+    return MongoClient(mongodb_uri, serverSelectionTimeoutMS=server_timeout)
 import threading
 import webbrowser
 from PIL import Image
@@ -132,6 +139,100 @@ def synthesize_mask_on_face(rgb_image, face_location):
     return masked_rgb
 
 
+def detect_mask_in_face(rgb_image, face_location):
+    """Detect if a person is wearing a mask by analyzing the lower face region - improved version"""
+    try:
+        top, right, bottom, left = face_location
+        face_height = bottom - top
+        face_width = right - left
+        
+        # Need minimum face size to detect mask
+        if face_height < 50 or face_width < 50:
+            return False
+        
+        # Analyze the lower 35-45% of the face (mouth and chin area) - more lenient
+        lower_face_start = 0.55  # Start from 55% down (more area to check)
+        lower_face_top = top + int(face_height * lower_face_start)
+        lower_face_bottom = bottom
+        lower_face_left = left
+        lower_face_right = right
+        
+        # Ensure coordinates are within image bounds
+        h, w = rgb_image.shape[:2]
+        lower_face_top = max(0, lower_face_top)
+        lower_face_bottom = min(h, lower_face_bottom)
+        lower_face_left = max(0, lower_face_left)
+        lower_face_right = min(w, lower_face_right)
+        
+        if lower_face_bottom <= lower_face_top or lower_face_right <= lower_face_left:
+            return False
+        
+        # Extract the lower face region
+        lower_face_region = rgb_image[lower_face_top:lower_face_bottom, lower_face_left:lower_face_right]
+        
+        if lower_face_region.size == 0:
+            return False
+        
+        # Convert to grayscale for analysis
+        gray_region = cv2.cvtColor(lower_face_region, cv2.COLOR_RGB2GRAY) if len(lower_face_region.shape) == 3 else lower_face_region
+        
+        # Method 1: Check variance - masked regions typically have lower variance (more uniform)
+        variance = np.var(gray_region)
+        
+        # Method 2: Check for horizontal edges (mask edges are typically horizontal)
+        edges = cv2.Canny(gray_region, 30, 100)  # Lower thresholds for better detection
+        horizontal_edges = np.sum(edges[int(edges.shape[0]*0.2):int(edges.shape[0]*0.8), :] > 0)
+        total_pixels = edges.shape[0] * edges.shape[1]
+        horizontal_edge_ratio = horizontal_edges / total_pixels if total_pixels > 0 else 0
+        
+        # Method 3: Check color uniformity in lower region (masks are usually uniform colors)
+        if len(lower_face_region.shape) == 3:
+            # Calculate color variance in each channel
+            color_variance = np.var(lower_face_region.reshape(-1, 3), axis=0)
+            avg_color_variance = np.mean(color_variance)
+        else:
+            avg_color_variance = variance
+        
+        # Method 4: Check for skin color - if lower region doesn't have typical skin tones, likely masked
+        if len(lower_face_region.shape) == 3:
+            # Convert to HSV for better skin detection
+            hsv_region = cv2.cvtColor(lower_face_region, cv2.COLOR_RGB2HSV)
+            # Typical skin hue range (0-20 and 160-180)
+            skin_pixels = np.sum((hsv_region[:, :, 0] < 20) | (hsv_region[:, :, 0] > 160))
+            skin_ratio = skin_pixels / (hsv_region.shape[0] * hsv_region.shape[1]) if hsv_region.size > 0 else 0
+        else:
+            skin_ratio = 0.5  # Assume some skin if grayscale
+        
+        # More lenient heuristics - any strong indicator suggests mask
+        # Lower variance = more uniform = likely mask
+        variance_low = variance < 1200  # More lenient threshold
+        
+        # Horizontal edges suggest mask edges
+        has_horizontal_edges = horizontal_edge_ratio > 0.03  # Lower threshold
+        
+        # Low color variance = uniform color = likely mask
+        color_uniform = avg_color_variance < 1500  # More lenient
+        
+        # Low skin ratio = not typical skin = likely mask
+        low_skin_ratio = skin_ratio < 0.3
+        
+        # If multiple indicators suggest mask, likely masked
+        mask_indicators = sum([variance_low, has_horizontal_edges, color_uniform, low_skin_ratio])
+        is_masked = mask_indicators >= 2  # At least 2 indicators
+        
+        # Strong indicator: very uniform region
+        if variance < 600 and avg_color_variance < 800:
+            is_masked = True
+        
+        return bool(is_masked)
+        
+    except Exception as e:
+        print(f"⚠️ Error detecting mask: {e}")
+        # On error, try to detect based on face region size and position
+        # If lower face region is large enough, assume no mask for safety
+        return False
+
+
 def extract_upper_face_region(rgb_image, face_location):
     """Extract upper portion of face (eyes, nose bridge, forehead) for masked face recognition"""
     try:
@@ -211,7 +312,7 @@ def create_upper_face_encoding(rgb_image, face_location):
         # Method 1: Try to detect face in upper region and encode
         upper_locations = face_recognition.face_locations(upper_face_region, model='hog')
         if upper_locations:
-            upper_encodings = face_recognition.face_encodings(upper_face_region, upper_locations, num_jitters=3, model='large')
+            upper_encodings = face_recognition.face_encodings(upper_face_region, upper_locations, num_jitters=1)
             if upper_encodings:
                 print("✅ Created upper face encoding using face detection in upper region")
                 return upper_encodings[0]
@@ -219,15 +320,27 @@ def create_upper_face_encoding(rgb_image, face_location):
         # Method 2: Create a padded version to simulate full face
         region_h, region_w = upper_face_region.shape[:2]
         # Create a full-size face by padding the bottom
-        padded_face = np.zeros((region_h * 2, region_w, 3), dtype=np.uint8)
-        padded_face[:region_h, :, :] = upper_face_region
-        # Mirror the bottom part of upper region to fill the lower half
-        mirror_start = max(0, region_h - region_h // 3)
-        padded_face[region_h:, :, :] = upper_face_region[mirror_start:, :, :]
+        # Ensure we have enough rows to mirror
+        mirror_rows = min(region_h // 3, region_h)
+        if mirror_rows > 0:
+            padded_face = np.zeros((region_h + mirror_rows, region_w, 3), dtype=np.uint8)
+            padded_face[:region_h, :, :] = upper_face_region
+            # Mirror the bottom part of upper region to fill the lower half
+            mirror_start = max(0, region_h - mirror_rows)
+            mirror_end = region_h
+            if mirror_end > mirror_start:
+                mirrored_part = upper_face_region[mirror_start:mirror_end, :, :]
+                # Flip vertically to mirror
+                mirrored_part = np.flipud(mirrored_part)
+                padded_face[region_h:region_h + mirror_rows, :, :] = mirrored_part
+        else:
+            # If region is too small, just pad with zeros
+            padded_face = np.zeros((region_h * 2, region_w, 3), dtype=np.uint8)
+            padded_face[:region_h, :, :] = upper_face_region
         
         padded_locations = face_recognition.face_locations(padded_face, model='hog')
         if padded_locations:
-            padded_encodings = face_recognition.face_encodings(padded_face, padded_locations, num_jitters=3, model='large')
+            padded_encodings = face_recognition.face_encodings(padded_face, padded_locations, num_jitters=1)
             if padded_encodings:
                 print("✅ Created upper face encoding using padded region")
                 return padded_encodings[0]
@@ -237,7 +350,7 @@ def create_upper_face_encoding(rgb_image, face_location):
         adjusted_location = (top, right, upper_face_bottom, left)
         try:
             # Try encoding with adjusted location
-            adjusted_encodings = face_recognition.face_encodings(rgb_image, [adjusted_location], num_jitters=3, model='large')
+            adjusted_encodings = face_recognition.face_encodings(rgb_image, [adjusted_location], num_jitters=1)
             if adjusted_encodings:
                 print("✅ Created upper face encoding using adjusted face location")
                 return adjusted_encodings[0]
@@ -384,11 +497,11 @@ logger = logging.getLogger(__name__)
 EMAIL_CONFIG = {
     'smtp_server': os.getenv('SMTP_SERVER', 'smtp.gmail.com'),
     'smtp_port': int(os.getenv('SMTP_PORT', '587')),
-    'smtp_username': os.getenv('SMTP_USERNAME', 'collegeattendance4@gmail.com'),
-    'smtp_password': os.getenv('SMTP_PASSWORD', 'rrun gwlj owjv gqep'),  # Gmail App Password
-    'from_email': os.getenv('FROM_EMAIL', 'collegeattendance4@gmail.com'),
+    'smtp_username': os.getenv('SMTP_USERNAME', ''),
+    'smtp_password': os.getenv('SMTP_PASSWORD', ''),  # Gmail App Password - Set via environment variable
+    'from_email': os.getenv('FROM_EMAIL', ''),
     'from_name': os.getenv('FROM_NAME', 'College Attendance System'),
-    'teacher_emails': os.getenv('TEACHER_EMAILS', 'teacher1@example.com,teacher2@example.com').split(',')
+    'teacher_emails': os.getenv('TEACHER_EMAILS', '').split(',') if os.getenv('TEACHER_EMAILS') else []
 }
 
 # Print email configuration status on startup
@@ -489,70 +602,147 @@ def send_email(to_email, subject, body_html, body_text=None):
         traceback.print_exc()
         return False
 
-def send_attendance_confirmation_email(student_email, student_name, subject, class_name, timestamp):
-    """Send attendance confirmation email to student"""
-    if not student_email:
+def send_attendance_confirmation_email(student_email, student_name, subject, class_name, timestamp, parent_email=None):
+    """Send attendance confirmation email to student and parent"""
+    success_count = 0
+    
+    # Send email to student
+    if student_email:
+        subject_line = f"Attendance Marked - {subject}"
+        
+        body_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; }}
+                .content {{ background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }}
+                .info-box {{ background: white; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #3b82f6; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>✅ Attendance Confirmed</h2>
+                </div>
+                <div class="content">
+                    <p>Dear <strong>{student_name}</strong>,</p>
+                    <p>Your attendance has been successfully marked.</p>
+                    
+                    <div class="info-box">
+                        <p><strong>Subject:</strong> {subject}</p>
+                        <p><strong>Class:</strong> {class_name}</p>
+                        <p><strong>Date & Time:</strong> {timestamp.strftime('%B %d, %Y at %I:%M %p')}</p>
+                    </div>
+                    
+                    <p>If you have any questions or concerns, please contact your instructor.</p>
+                    
+                    <div class="footer">
+                        <p>This is an automated message from the Attendance System.</p>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        body_text = f"""
+        Attendance Confirmed
+        
+        Dear {student_name},
+        
+        Your attendance has been successfully marked.
+        
+        Subject: {subject}
+        Class: {class_name}
+        Date & Time: {timestamp.strftime('%B %d, %Y at %I:%M %p')}
+        
+        If you have any questions or concerns, please contact your instructor.
+        
+        This is an automated message from the Attendance System.
+        """
+        
+        if send_email(student_email, subject_line, body_html, body_text):
+            success_count += 1
+            logger.info(f"Attendance confirmation email sent to student: {student_email}")
+        else:
+            logger.warning(f"Failed to send email to student: {student_email}")
+    else:
         logger.warning(f"No email address for student {student_name}")
-        return False
     
-    subject_line = f"Attendance Marked - {subject}"
-    
-    body_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .header {{ background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; }}
-            .content {{ background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }}
-            .info-box {{ background: white; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #3b82f6; }}
-            .footer {{ text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h2>✅ Attendance Confirmed</h2>
-            </div>
-            <div class="content">
-                <p>Dear <strong>{student_name}</strong>,</p>
-                <p>Your attendance has been successfully marked.</p>
-                
-                <div class="info-box">
-                    <p><strong>Subject:</strong> {subject}</p>
-                    <p><strong>Class:</strong> {class_name}</p>
-                    <p><strong>Date & Time:</strong> {timestamp.strftime('%B %d, %Y at %I:%M %p')}</p>
+    # Send email to parent
+    if parent_email:
+        parent_subject_line = f"Your Child's Attendance Marked - {subject}"
+        
+        parent_body_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background: linear-gradient(135deg, #059669 0%, #10b981 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; }}
+                .content {{ background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }}
+                .info-box {{ background: white; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #10b981; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #6b7280; font-size: 12px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>✅ Attendance Notification</h2>
                 </div>
-                
-                <p>If you have any questions or concerns, please contact your instructor.</p>
-                
-                <div class="footer">
-                    <p>This is an automated message from the Attendance System.</p>
+                <div class="content">
+                    <p>Dear Parent/Guardian,</p>
+                    <p>This is to inform you that your child <strong>{student_name}</strong>'s attendance has been successfully marked.</p>
+                    
+                    <div class="info-box">
+                        <p><strong>Student Name:</strong> {student_name}</p>
+                        <p><strong>Subject:</strong> {subject}</p>
+                        <p><strong>Class:</strong> {class_name}</p>
+                        <p><strong>Date & Time:</strong> {timestamp.strftime('%B %d, %Y at %I:%M %p')}</p>
+                    </div>
+                    
+                    <p>If you have any questions or concerns, please contact the institution.</p>
+                    
+                    <div class="footer">
+                        <p>This is an automated message from the Attendance System.</p>
+                    </div>
                 </div>
             </div>
-        </div>
-    </body>
-    </html>
-    """
+        </body>
+        </html>
+        """
+        
+        parent_body_text = f"""
+        Attendance Notification
+        
+        Dear Parent/Guardian,
+        
+        This is to inform you that your child {student_name}'s attendance has been successfully marked.
+        
+        Student Name: {student_name}
+        Subject: {subject}
+        Class: {class_name}
+        Date & Time: {timestamp.strftime('%B %d, %Y at %I:%M %p')}
+        
+        If you have any questions or concerns, please contact the institution.
+        
+        This is an automated message from the Attendance System.
+        """
+        
+        if send_email(parent_email, parent_subject_line, parent_body_html, parent_body_text):
+            success_count += 1
+            logger.info(f"Attendance notification email sent to parent: {parent_email}")
+        else:
+            logger.warning(f"Failed to send email to parent: {parent_email}")
+    else:
+        logger.info(f"No parent email address provided for {student_name}")
     
-    body_text = f"""
-    Attendance Confirmed
-    
-    Dear {student_name},
-    
-    Your attendance has been successfully marked.
-    
-    Subject: {subject}
-    Class: {class_name}
-    Date & Time: {timestamp.strftime('%B %d, %Y at %I:%M %p')}
-    
-    If you have any questions or concerns, please contact your instructor.
-    
-    This is an automated message from the Attendance System.
-    """
-    
-    return send_email(student_email, subject_line, body_html, body_text)
+    return success_count > 0
 
 def send_daily_summary_email(teacher_emails, date, attendance_data):
     """Send daily attendance summary to teachers"""
@@ -686,12 +876,13 @@ class FixedWebFaceRecognition:
         self.known_face_names = []
         self.known_face_metadata = []
         
-        # Recognition parameters - Optimized for better detection
-        self.recognition_tolerance = 0.6  # face_recognition library tolerance
-        self.masked_recognition_tolerance = 0.9  # relaxed tolerance for masked variants
-        self.min_confidence = 0.3  # Reasonable threshold for normal faces
-        self.max_distance = 0.6  # Standard distance threshold for normal faces
-        self.masked_max_distance = 1.2  # Lenient distance threshold for masked encodings
+        # Recognition parameters - Balanced to avoid false positives
+        self.recognition_tolerance = 0.5
+        self.masked_recognition_tolerance = 0.65
+        self.min_confidence = 0.5
+        self.max_distance = 0.5
+        self.masked_max_distance = 0.75
+        self.min_distance_gap = 0.08  # Require clearer gap to declare a match
         
         # Initialize face security system
         self.anti_spoof_predictor = None
@@ -699,6 +890,7 @@ class FixedWebFaceRecognition:
         self.model_dir = None
         self.detection_model_dir = None
         self.debug_dump_count = 0
+        self.cached_models = {}  # Cache for loaded models to avoid reloading
         
         if ANTISPOOFING_AVAILABLE:
             try:
@@ -721,14 +913,18 @@ class FixedWebFaceRecognition:
                     # Initialize face security components with base_dir parameter
                     # The base_dir parameter allows the module to find resources automatically
                     self.anti_spoof_predictor = AntiSpoofPredict(device_id=0, base_dir=face_security_dir)
-                        self.image_cropper = CropImage()
+                    self.image_cropper = CropImage()
                     
                     # Check if anti-spoofing models exist
                     if os.path.exists(self.model_dir):
                         model_files = [f for f in os.listdir(self.model_dir) if f.endswith('.pth')]
-                        print(f"✅ Loaded {len(model_files)} anti-spoofing models:")
+                        print(f"✅ Found {len(model_files)} anti-spoofing models:")
                         for model_file in model_files:
                             print(f"   - {model_file}")
+                        
+                        # Pre-load models for faster prediction (cache them)
+                        print("🔄 Pre-loading models for faster prediction...")
+                        self._preload_anti_spoofing_models(model_files)
                     else:
                         print("❌ Anti-spoofing models directory not found")
                         self.anti_spoof_predictor = None
@@ -743,13 +939,81 @@ class FixedWebFaceRecognition:
         
         print("Initializing web face recognition system...")
         self.load_known_faces_from_db()
+    
+    def _preload_anti_spoofing_models(self, model_files):
+        """Pre-load anti-spoofing models into cache for faster prediction"""
+        if not self.anti_spoof_predictor:
+            return
+        
+        try:
+            from src.utility import parse_model_name, get_kernel
+            from src.model_lib.MiniFASNet import MiniFASNetV1, MiniFASNetV2, MiniFASNetV1SE, MiniFASNetV2SE
+            
+            MODEL_MAPPING = {
+                'MiniFASNetV1': MiniFASNetV1,
+                'MiniFASNetV2': MiniFASNetV2,
+                'MiniFASNetV1SE': MiniFASNetV1SE,
+                'MiniFASNetV2SE': MiniFASNetV2SE
+            }
+            
+            for model_name in model_files:
+                try:
+                    model_path = os.path.join(self.model_dir, model_name)
+                    if not os.path.exists(model_path):
+                        continue
+                    
+                    # Parse model parameters
+                    h_input, w_input, model_type, scale = parse_model_name(model_name)
+                    kernel_size = get_kernel(h_input, w_input)
+                    
+                    # Create model
+                    device = self.anti_spoof_predictor.device
+                    model = MODEL_MAPPING[model_type](conv6_kernel=kernel_size).to(device)
+                    
+                    # Load weights
+                    state_dict = torch.load(model_path, map_location=device)
+                    keys = iter(state_dict)
+                    first_layer_name = keys.__next__()
+                    if first_layer_name.find('module.') >= 0:
+                        from collections import OrderedDict
+                        new_state_dict = OrderedDict()
+                        for key, value in state_dict.items():
+                            name_key = key[7:]
+                            new_state_dict[name_key] = value
+                        model.load_state_dict(new_state_dict)
+                    else:
+                        model.load_state_dict(state_dict)
+                    
+                    model.eval()  # Set to evaluation mode
+                    
+                    # Cache the model
+                    self.cached_models[model_name] = {
+                        'model': model,
+                        'h_input': h_input,
+                        'w_input': w_input,
+                        'model_type': model_type,
+                        'scale': scale,
+                        'kernel_size': kernel_size
+                    }
+                    
+                    print(f"   ✅ Cached model: {model_name}")
+                    
+                except Exception as model_error:
+                    print(f"   ⚠️ Failed to cache model {model_name}: {model_error}")
+                    continue
+            
+            print(f"✅ Successfully cached {len(self.cached_models)} models for faster prediction")
+            
+        except Exception as e:
+            print(f"⚠️ Error pre-loading models: {e}")
+            # Continue without caching - will load on demand
 
     def load_known_faces_from_db(self):
         """Load known faces from database"""
         try:
             print("Connecting to MongoDB...")
             # Try to connect to MongoDB
-            client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+            client = get_mongodb_client()
             db = client.attendance_system
             students_collection = db.students
             
@@ -780,17 +1044,23 @@ class FixedWebFaceRecognition:
                 print(f"Processing student: {student_name} (ID: {student_id})")
                 
                 base_metadata = {
-                                'registered_at': student.get('registered_at', ''),
+                    'registered_at': student.get('registered_at', ''),
                     'active': student.get('active', True),
                     'data_source': 'database'
-                            }
-
+                }
+            
                 # Load baseline (unmasked) encoding
                 if 'face_encoding' in student and student['face_encoding']:
-                    if self._register_known_encoding(student['face_encoding'], student_id, student_name, variant='normal', metadata=base_metadata):
-                            loaded_count += 1
-                        else:
-                    print(f"⚠️ No baseline face encoding found for {student_name} (ID: {student_id})")
+                    if self._register_known_encoding(
+                        student['face_encoding'],
+                        student_id,
+                        student_name,
+                        variant='normal',
+                        metadata=base_metadata,
+                    ):
+                        loaded_count += 1
+                    else:
+                        print(f"⚠️ No baseline face encoding found for {student_name} (ID: {student_id})")
 
                 # Load masked encoding if available
                 if 'face_encoding_masked' in student and student['face_encoding_masked']:
@@ -867,20 +1137,34 @@ class FixedWebFaceRecognition:
             # Convert to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             rgb_frame = np.ascontiguousarray(rgb_frame, dtype=np.uint8)
-            print(f"📐 RGB frame info: dtype={rgb_frame.dtype}, shape={rgb_frame.shape}, strides={rgb_frame.strides}, contiguous={rgb_frame.flags['C_CONTIGUOUS']}, owndata={rgb_frame.flags['OWNDATA']}", flush=True)
+            
+            # Image preprocessing for better recognition in different lighting/angle conditions
+            if len(rgb_frame.shape) == 3:
+                # Convert to LAB color space for better equalization
+                lab = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2LAB)
+                l, a, b = cv2.split(lab)
+                # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L channel
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                l = clahe.apply(l)
+                # Merge channels and convert back to RGB
+                lab = cv2.merge([l, a, b])
+                rgb_frame = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+                rgb_frame = np.ascontiguousarray(rgb_frame, dtype=np.uint8)
 
             if not rgb_frame.flags['OWNDATA']:
-                print("ℹ️ Making RGB frame own its data", flush=True)
                 rgb_frame = rgb_frame.copy(order='C')
-                print(f"📐 RGB frame (copied) info: dtype={rgb_frame.dtype}, shape={rgb_frame.shape}, strides={rgb_frame.strides}, contiguous={rgb_frame.flags['C_CONTIGUOUS']}, owndata={rgb_frame.flags['OWNDATA']}", flush=True)
 
-            print("✅ Frame converted to RGB", flush=True)
+            print("✅ Frame converted to RGB and preprocessed for better recognition", flush=True)
             
             # Detect faces with optimized settings for better detection
             print("🔍 Detecting faces...", flush=True)
-
+            
             try:
-            face_locations = face_recognition.face_locations(rgb_frame, model="hog", number_of_times_to_upsample=1)
+                face_locations = face_recognition.face_locations(
+                    rgb_frame,
+                    model="hog",
+                    number_of_times_to_upsample=1,
+                )
             except RuntimeError as rte:
                 print(f"⚠️ face_recognition initial call failed: {rte}", flush=True)
 
@@ -924,33 +1208,66 @@ class FixedWebFaceRecognition:
                 print("❌ No faces detected in frame (tried both standard and MediaPipe)")
                 return [], [], [], []
             
-            # Get face encodings with tolerance parameter
+            # Detect masks and create appropriate encodings
             print("🧠 Extracting face encodings...")
-            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations, num_jitters=1)
-            print(f"✅ Extracted {len(face_encodings)} face encodings")
+            face_encodings = []
+            is_masked_list = []  # Track which faces are masked
             
-            # If standard encoding fails, try upper face encoding (for masked faces)
-            if not face_encodings and len(face_locations) > 0:
-                print("🔄 Standard encoding failed, trying upper face encoding for masked faces...", flush=True)
-                upper_face_encodings = []
-                for face_location in face_locations:
+            for face_location in face_locations:
+                # Check if this face is wearing a mask
+                is_masked = detect_mask_in_face(rgb_frame, face_location)
+                is_masked_list.append(is_masked)
+                
+                if is_masked:
+                    print(f"😷 Mask detected! Creating upper face encoding...", flush=True)
+                    # For masked faces, create upper face encoding
                     upper_encoding = create_upper_face_encoding(rgb_frame, face_location)
                     if upper_encoding is not None:
-                        upper_face_encodings.append(upper_encoding)
+                        face_encodings.append(upper_encoding)
+                        print(f"✅ Created upper face encoding for masked face", flush=True)
                     else:
-                        # Fallback: try to get encoding from the full face again with different settings
+                        # Fallback: try standard encoding even with mask
+                        print(f"⚠️ Upper face encoding failed, trying standard encoding...", flush=True)
                         try:
-                            fallback_encodings = face_recognition.face_encodings(
-                                rgb_frame, [face_location], num_jitters=3, model='large'
+                            standard_encodings = face_recognition.face_encodings(
+                                rgb_frame, [face_location], num_jitters=1
                             )
-                            if fallback_encodings:
-                                upper_face_encodings.append(fallback_encodings[0])
-                        except Exception as fallback_e:
-                            print(f"⚠️ Fallback encoding also failed: {fallback_e}")
-                
-                if upper_face_encodings:
-                    print(f"✅ Extracted {len(upper_face_encodings)} upper face encodings", flush=True)
-                    face_encodings = upper_face_encodings
+                            if standard_encodings:
+                                face_encodings.append(standard_encodings[0])
+                            else:
+                                face_encodings.append(None)
+                        except Exception as e:
+                            print(f"⚠️ Standard encoding also failed: {e}", flush=True)
+                            face_encodings.append(None)
+                else:
+                    # For unmasked faces, use standard encoding
+                    try:
+                        standard_encodings = face_recognition.face_encodings(
+                            rgb_frame, [face_location], num_jitters=1
+                        )
+                        if standard_encodings:
+                            face_encodings.append(standard_encodings[0])
+                        else:
+                            face_encodings.append(None)
+                    except Exception as e:
+                        print(f"⚠️ Standard encoding failed: {e}", flush=True)
+                        face_encodings.append(None)
+            
+            # Filter out None encodings and update face_locations accordingly
+            valid_encodings = []
+            valid_locations = []
+            valid_masked_flags = []
+            for enc, loc, masked in zip(face_encodings, face_locations, is_masked_list):
+                if enc is not None:
+                    valid_encodings.append(enc)
+                    valid_locations.append(loc)
+                    valid_masked_flags.append(masked)
+            
+            face_encodings = valid_encodings
+            face_locations = valid_locations
+            is_masked_list = valid_masked_flags
+            
+            print(f"✅ Extracted {len(face_encodings)} face encodings ({sum(is_masked_list)} masked, {len(is_masked_list) - sum(is_masked_list)} unmasked)")
             
             if not face_encodings:
                 print("❌ Failed to extract face encodings (tried standard and upper face methods)")
@@ -961,63 +1278,59 @@ class FixedWebFaceRecognition:
             confidences = []
             
             print("🔍 Identifying faces...")
-            for i, (face_encoding, face_location) in enumerate(zip(face_encodings, face_locations)):
-                print(f"  Processing face {i+1}/{len(face_encodings)}")
-                
-                # Method 1: Standard recognition (normal encodings) - PRIMARY METHOD
-                student_id, student_name, confidence = self._identify_face(face_encoding, is_masked_face=False)
-                print(f"  Method 1 (standard): {student_name} - Confidence: {confidence:.3f}")
-                
-                # Only try masked methods if standard recognition failed or confidence is very low
-                if student_id == "Unknown" or confidence < 0.3:
-                    print(f"  ⚠️ Standard recognition failed/low confidence, trying masked face methods...", flush=True)
+            for i, (face_encoding, face_location, is_masked) in enumerate(zip(face_encodings, face_locations, is_masked_list)):
+                if is_masked:
+                    # For masked faces, prioritize masked face recognition
+                    print(f"😷 Processing masked face {i+1}...", flush=True)
+                    student_id, student_name, confidence = self._identify_face(face_encoding, is_masked_face=True)
                     
-                    # Method 2: Standard encoding with masked face flag (tries masked encodings with lenient thresholds)
-                    student_id2, student_name2, confidence2 = self._identify_face(face_encoding, is_masked_face=True)
-                    print(f"  Method 2 (standard + masked flag): {student_name2} - Confidence: {confidence2:.3f}")
-                    
-                    # Use Method 2 if it's better (higher confidence or found a match when Method 1 didn't)
-                    if (student_id2 != "Unknown" and student_id == "Unknown") or (confidence2 > confidence and student_id2 != "Unknown"):
-                        student_id = student_id2
-                        student_name = student_name2
-                        confidence = confidence2
-                        print(f"  ✅ Method 2 improved recognition", flush=True)
-                    
-                    # Method 3: Upper face encoding (for masked faces) - only if still not found
+                    # If masked recognition fails, try normal recognition as fallback (with lower threshold)
                     if student_id == "Unknown" or confidence < 0.3:
-                        print(f"  ⚠️ Trying upper face encoding for masked face detection...", flush=True)
-                        upper_encoding = create_upper_face_encoding(rgb_frame, face_location)
-                        if upper_encoding is not None:
-                            student_id3, student_name3, confidence3 = self._identify_face(upper_encoding, is_masked_face=True)
-                            print(f"  Method 3 (upper face + masked flag): {student_name3} - Confidence: {confidence3:.3f}")
-                            
-                            # Use Method 3 if it's better
-                            if (student_id3 != "Unknown" and student_id == "Unknown") or (confidence3 > confidence and student_id3 != "Unknown"):
-                                student_id = student_id3
-                                student_name = student_name3
-                                confidence = confidence3
-                                print(f"  ✅ Upper face encoding provided best match!", flush=True)
-                        else:
-                            print(f"  ⚠️ Upper face encoding creation failed", flush=True)
+                        student_id2, student_name2, confidence2 = self._identify_face(face_encoding, is_masked_face=False)
+                        if student_id2 != "Unknown" and confidence2 > confidence:
+                            student_id = student_id2
+                            student_name = student_name2
+                            confidence = confidence2
                 else:
-                    print(f"  ✅ Standard recognition successful - using Method 1 result", flush=True)
+                    # For unmasked faces, use normal recognition first
+                    student_id, student_name, confidence = self._identify_face(face_encoding, is_masked_face=False)
+                    
+                    # Fallback to masked recognition if normal fails (with lower threshold for speed)
+                    if student_id == "Unknown" or confidence < 0.4:
+                        student_id2, student_name2, confidence2 = self._identify_face(face_encoding, is_masked_face=True)
+                        if student_id2 != "Unknown" and confidence2 > confidence:
+                            student_id = student_id2
+                            student_name = student_name2
+                            confidence = confidence2
                 
                 recognized_ids.append(student_id)
                 recognized_names.append(student_name)
                 confidences.append(confidence)
-                print(f"  🎯 Final Result: {student_name} (ID: {student_id}) - Confidence: {confidence:.3f}")
+                mask_status = "😷 Masked" if is_masked else "👤 Unmasked"
+                print(f"  🎯 Final Result: {student_name} (ID: {student_id}) - Confidence: {confidence:.3f} [{mask_status}]")
             
             print(f"✅ Face recognition complete: {len(recognized_ids)} faces processed")
             return face_locations, recognized_ids, recognized_names, confidences
             
         except Exception as e:
-            print(f"❌ Error in face recognition: {str(e)}", flush=True)
+            error_msg = str(e)
+            # Handle specific Windows errors gracefully
+            if 'WinError 6' in error_msg or 'handle is invalid' in error_msg.lower():
+                print(f"⚠️ Windows handle error (likely threading issue), continuing...", flush=True)
+                # Return empty results instead of crashing
+                return [], [], [], []
+            
+            print(f"❌ Error in face recognition: {error_msg}", flush=True)
             if 'frame' in locals() and isinstance(frame, np.ndarray):
                 print(f"🧾 Frame debug -> dtype: {frame.dtype}, shape: {frame.shape}, flags: C_CONTIGUOUS={frame.flags['C_CONTIGUOUS']}, OWNDATA={frame.flags['OWNDATA']}", flush=True)
             if 'rgb_frame' in locals() and isinstance(rgb_frame, np.ndarray):
                 print(f"🧾 RGB debug -> dtype: {rgb_frame.dtype}, shape: {rgb_frame.shape}, flags: C_CONTIGUOUS={rgb_frame.flags['C_CONTIGUOUS']}, OWNDATA={rgb_frame.flags['OWNDATA']}", flush=True)
-            import traceback
-            traceback.print_exc()
+            
+            # Only print full traceback for non-Windows errors
+            if 'WinError' not in error_msg:
+                import traceback
+                traceback.print_exc()
+            
             return [], [], [], []
 
     def check_anti_spoofing(self, frame, face_location):
@@ -1029,18 +1342,91 @@ class FixedWebFaceRecognition:
             return True, 0.0  # Assume real if anti-spoofing not available
         
         try:
-            # Use face security module's own face detection
-            print("🔍 Using face security module face detection...")
-            bbox = self.anti_spoof_predictor.get_bbox(frame)
-            
-            if bbox is None:
-                print("❌ No face detected by face security module, assuming real face")
+            # Ensure frame is in BGR format (OpenCV format)
+            if frame is None:
+                print("❌ Frame is None, assuming real face")
                 return True, 0.0
             
-            print(f"📍 Face security module bbox: {bbox}")
+            # Convert to BGR if needed (frame should already be BGR from cv2.imdecode)
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                # Already BGR, use as is
+                bgr_frame = frame.copy()
+            else:
+                print(f"⚠️ Unexpected frame format: shape={frame.shape}, converting to BGR")
+                if len(frame.shape) == 2:
+                    bgr_frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                elif len(frame.shape) == 3 and frame.shape[2] == 4:
+                    bgr_frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                else:
+                    print(f"❌ Cannot convert frame format: {frame.shape}")
+                return True, 0.0
+            
+            # Convert face_location (top, right, bottom, left) to bbox format [left, top, width, height]
+            if face_location and len(face_location) == 4:
+                top, right, bottom, left = face_location
+                # Ensure coordinates are valid
+                left = max(0, int(left))
+                top = max(0, int(top))
+                right = min(bgr_frame.shape[1], int(right))
+                bottom = min(bgr_frame.shape[0], int(bottom))
+                
+                width = right - left
+                height = bottom - top
+                
+                # Validate bbox dimensions
+                if width <= 0 or height <= 0:
+                    print(f"❌ Invalid bbox dimensions: width={width}, height={height}")
+                    return True, 0.0
+                
+                bbox = [left, top, width, height]
+                print(f"📍 Using provided face location: {face_location} -> bbox: {bbox}, frame_shape: {bgr_frame.shape}")
+            else:
+                # Fallback: Use face_recognition module for face detection (consistent with main system)
+                print("🔍 Using face_recognition module for face detection (fallback)...")
+                try:
+                    # Convert BGR to RGB for face_recognition
+                    rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+                    
+                    # Detect faces using face_recognition module
+                    detected_locations = face_recognition.face_locations(rgb_frame, model='hog', number_of_times_to_upsample=1)
+                    
+                    if not detected_locations:
+                        # Try MediaPipe as additional fallback if available
+                        if MEDIAPIPE_AVAILABLE:
+                            print("🔄 face_recognition failed, trying MediaPipe...")
+                            detected_locations = detect_faces_with_mediapipe(rgb_frame)
+                    
+                    if not detected_locations:
+                        print("❌ No face detected by face_recognition module, assuming real face")
+                        return True, 0.0
+                    
+                    # Use the first detected face
+                    top, right, bottom, left = detected_locations[0]
+                    
+                    # Ensure coordinates are valid
+                    left = max(0, int(left))
+                    top = max(0, int(top))
+                    right = min(bgr_frame.shape[1], int(right))
+                    bottom = min(bgr_frame.shape[0], int(bottom))
+                    
+                    width = right - left
+                    height = bottom - top
+                    
+                    # Validate bbox dimensions
+                    if width <= 0 or height <= 0:
+                        print(f"❌ Invalid bbox dimensions: width={width}, height={height}")
+                        return True, 0.0
+                    
+                    bbox = [left, top, width, height]
+                    print(f"📍 face_recognition module detected bbox: {bbox} (from location: {detected_locations[0]})")
+                except Exception as detect_error:
+                    print(f"❌ Error in face_recognition detection: {detect_error}")
+                    import traceback
+                    traceback.print_exc()
+                    return True, 0.0
             
             # Use the helper method for anti-spoofing
-            return self._test_anti_spoofing_with_bbox(frame, bbox)
+            return self._test_anti_spoofing_with_bbox(bgr_frame, bbox)
             
         except Exception as e:
             print(f"❌ Error in face security detection: {e}")
@@ -1055,29 +1441,54 @@ class FixedWebFaceRecognition:
             return True, 0.0
         
         try:
-            print(f"📍 Testing with bbox: {bbox}")
+            print(f"📍 Testing with bbox: {bbox}, frame_shape: {frame.shape}")
             
-            # Validate bbox
-            if bbox[0] < 0 or bbox[1] < 0 or bbox[0] + bbox[2] >= frame.shape[1] or bbox[1] + bbox[3] >= frame.shape[0]:
-                print("❌ Invalid bbox, assuming real face")
+            # Validate bbox - ensure it's within frame bounds
+            if bbox[0] < 0 or bbox[1] < 0 or bbox[0] + bbox[2] > frame.shape[1] or bbox[1] + bbox[3] > frame.shape[0]:
+                print(f"⚠️ Bbox out of bounds, adjusting: bbox={bbox}, frame_shape={frame.shape}")
+                # Adjust bbox to fit within frame
+                bbox[0] = max(0, bbox[0])
+                bbox[1] = max(0, bbox[1])
+                bbox[2] = min(bbox[2], frame.shape[1] - bbox[0])
+                bbox[3] = min(bbox[3], frame.shape[0] - bbox[1])
+                if bbox[2] <= 0 or bbox[3] <= 0:
+                    print("❌ Invalid bbox after adjustment, assuming real face")
+                    return True, 0.0
+                print(f"✅ Adjusted bbox: {bbox}")
+            
+            # Check if model directory exists and has models
+            if not os.path.exists(self.model_dir):
+                print(f"❌ Model directory not found: {self.model_dir}")
                 return True, 0.0
+            
+            model_files = [f for f in os.listdir(self.model_dir) if f.endswith('.pth')]
+            if not model_files:
+                print(f"❌ No .pth model files found in {self.model_dir}")
+                return True, 0.0
+            
+            print(f"📦 Found {len(model_files)} model files: {model_files}")
             
             # Initialize prediction accumulator (same as original test.py)
             prediction = np.zeros((1, 3))
             model_count = 0
             
-            # Use all available models for ensemble prediction (exactly like original test.py)
-            for model_name in os.listdir(self.model_dir):
-                if not model_name.endswith('.pth'):
-                    continue
-                
+            # Use all available models for ensemble prediction (optimized with caching)
+            for model_name in model_files:
                 try:
-                    print(f"🤖 Processing with model: {model_name}")
+                    # Check if model is cached
+                    if model_name in self.cached_models:
+                        # Use cached model for faster prediction
+                        cached = self.cached_models[model_name]
+                        h_input = cached['h_input']
+                        w_input = cached['w_input']
+                        scale = cached['scale']
+                        model = cached['model']
+                    else:
+                        # Fallback: parse and load model (slower)
+                        h_input, w_input, model_type, scale = parse_model_name(model_name)
+                        model = None  # Will use predictor's predict method
                     
-                    # Parse the model name to get parameters (same as original)
-                    h_input, w_input, model_type, scale = parse_model_name(model_name)
-                    
-                    # Prepare image for prediction using CropImage (same as original)
+                    # Prepare image for prediction using CropImage
                     param = {
                         "org_img": frame,
                         "bbox": bbox,
@@ -1087,26 +1498,43 @@ class FixedWebFaceRecognition:
                         "crop": True,
                     }
                     
-                    # Handle scale parameter (same as original test.py)
+                    # Handle scale parameter
                     if scale is None:
                         param["crop"] = False
                     
                     # Crop and prepare image
                     img = self.image_cropper.crop(**param)
-                    print(f"📷 Cropped image shape: {img.shape}")
+                    if img is None or img.size == 0:
+                        continue
                     
-                    # Get model path and predict
-                    # Use just the filename - the _load_model method will resolve it relative to base_dir
-                    model_prediction = self.anti_spoof_predictor.predict(img, model_name)
+                    # Predict using cached model (much faster) or fallback
+                    if model is not None:
+                        # Use cached model directly (fast path - no reloading!)
+                        from src.data_io import transform as trans
+                        import torch.nn.functional as F
+                        test_transform = trans.Compose([trans.ToTensor()])
+                        img_tensor = test_transform(img)
+                        device = self.anti_spoof_predictor.device
+                        img_tensor = img_tensor.unsqueeze(0).to(device)
+                        
+                        with torch.no_grad():
+                            result = model(img_tensor)
+                            model_prediction = F.softmax(result).cpu().numpy()
+                    else:
+                        # Fallback: use predictor's predict method (slower - reloads model)
+                        model_prediction = self.anti_spoof_predictor.predict(img, model_name)
                     
-                    # Accumulate predictions (same as original)
+                    if model_prediction is None or model_prediction.size == 0:
+                        continue
+                    
+                    # Accumulate predictions
                     prediction += model_prediction
                     model_count += 1
                     
-                    print(f"📊 Model {model_name} prediction: {model_prediction}")
-                    
                 except Exception as model_error:
                     print(f"⚠️ Error with model {model_name}: {model_error}")
+                    import traceback
+                    traceback.print_exc()
                     continue
             
             if model_count == 0:
@@ -1122,28 +1550,20 @@ class FixedWebFaceRecognition:
             fake_score = prediction[0][0] / sum(prediction[0]) if sum(prediction[0]) > 0 else 0
             spoof_score = prediction[0][2] / sum(prediction[0]) if sum(prediction[0]) > 0 else 0
             
-            # Use threshold-based detection (like test_anti_spoofing.py)
-            threshold = 0.3  # Lower threshold for better real face detection
-            is_real = (label == 1 and value > threshold)
-            confidence = float(value)
+            # Use improved threshold-based detection
+            # Use real_score (probability of being real) instead of just checking label
+            threshold = 0.5  # Balanced threshold - requires at least 50% confidence it's real
+            is_real = (real_score > threshold) and (real_score > fake_score) and (real_score > spoof_score)
+            confidence = float(real_score)  # Use real_score as confidence
             
-            print(f"🛡️ Face security module result:")
-            print(f"   - Models used: {model_count}")
-            print(f"   - Raw prediction: {prediction[0]}")
-            print(f"   - Label: {label} (0=fake, 1=real, 2=spoof)")
-            print(f"   - Value: {value:.4f}")
-            print(f"   - Real score: {real_score:.4f}")
-            print(f"   - Fake score: {fake_score:.4f}")
-            print(f"   - Spoof score: {spoof_score:.4f}")
-            print(f"   - Threshold: {threshold}")
-            print(f"   - Is Real: {is_real}")
-            
-            if is_real:
-                print(f"✅ Image is Real Face. Score: {value:.2f}")
-            else:
-                print(f"❌ Image is Fake Face. Score: {value:.2f}")
+            # Reduced logging for performance - only log important results
+            if not is_real:
+                # Always log fake face detection (important)
+                print(f"🛡️ FAKE FACE DETECTED:")
+                print(f"   - Models used: {model_count}")
+                print(f"   - Real score: {real_score:.4f}, Fake score: {fake_score:.4f}, Spoof score: {spoof_score:.4f}")
                 print(f"   - Detected as: {'Fake' if label == 0 else 'Spoof' if label == 2 else 'Unknown'}")
-                print(f"   - Reason: {'Label not 1' if label != 1 else f'Value {value:.3f} <= threshold {threshold}'}")
+            # Don't log real faces to reduce output (they're the common case)
             
             return bool(is_real), confidence
             
@@ -1191,19 +1611,40 @@ class FixedWebFaceRecognition:
                     
                     print(f"🎯 Best masked encoding match: index={best_masked_idx}, distance={best_masked_distance:.3f}")
                     
-                    # Use very lenient threshold for masked faces - accept almost any reasonable match
-                    masked_threshold = 1.2  # Even more lenient
-                    masked_confidence = float(max(0, min(1, 1 - (best_masked_distance / masked_threshold))))
-                    
-                    # Accept if distance is reasonable (even if confidence is low)
+                    # Use more lenient threshold for masked faces for better recognition
+                    masked_threshold = self.masked_max_distance  # 0.75
+                    # Improved confidence calculation for masked faces
                     if best_masked_distance <= masked_threshold:
+                        normalized_distance = best_masked_distance / masked_threshold if masked_threshold > 0 else 1.0
+                        masked_confidence = float(max(0.3, min(1.0, 1.0 - (normalized_distance * 0.7))))
+                    else:
+                        masked_confidence = float(max(0, min(0.2, 1.0 - (best_masked_distance / masked_threshold * 1.2))))
+                    
+                    # Check if there are other masked encodings to compare
+                    if len(masked_distances) > 1:
+                        sorted_masked = sorted(masked_distances)
+                        second_best_masked = sorted_masked[1]
+                        masked_gap = second_best_masked - best_masked_distance
+                        is_clear_masked_match = (best_masked_distance <= masked_threshold * 0.85) or (masked_gap >= max(self.min_distance_gap, 0.1))
+                    else:
+                        is_clear_masked_match = best_masked_distance <= masked_threshold * 0.85
+                    
+                    # Require higher confidence to avoid false positives
+                    min_masked_confidence = 0.45
+                    if best_masked_distance <= masked_threshold and masked_confidence >= min_masked_confidence and is_clear_masked_match:
                         student_id = self.known_face_ids[best_masked_idx]
                         student_name = self.known_face_names[best_masked_idx]
-                        # Boost confidence if distance is actually good
-                        if best_masked_distance <= 0.8:
-                            masked_confidence = max(masked_confidence, 0.5)
                         print(f"✅ Recognized (masked): {student_name} (ID: {student_id}) with confidence {masked_confidence:.3f} (distance: {best_masked_distance:.3f})")
                         return student_id, student_name, masked_confidence
+                    else:
+                        reasons = []
+                        if best_masked_distance > masked_threshold:
+                            reasons.append(f"distance {best_masked_distance:.3f} > {masked_threshold}")
+                        if masked_confidence < min_masked_confidence:
+                            reasons.append(f"confidence {masked_confidence:.3f} < {min_masked_confidence}")
+                        if not is_clear_masked_match:
+                            reasons.append("ambiguous match")
+                        print(f"❌ Masked face not recognized: {', '.join(reasons)}")
 
             # Find the best match overall
             best_match_index = int(np.argmin(face_distances)) if len(face_distances) > 0 else -1
@@ -1212,50 +1653,72 @@ class FixedWebFaceRecognition:
                 return "Unknown", "Unknown", 0.0
 
             best_distance = float(face_distances[best_match_index])
+            
+            # Check if there's a second-best match to ensure the best match is significantly better
+            sorted_distances = sorted(face_distances)
+            second_best_distance = sorted_distances[1] if len(sorted_distances) > 1 else float('inf')
+            distance_gap = second_best_distance - best_distance
+            
             variant = self.known_face_metadata[best_match_index].get('variant', 'normal') if best_match_index < len(self.known_face_metadata) else 'normal'
             
-            # Use appropriate thresholds based on face type and encoding variant
+            # Use appropriate thresholds based on face type and encoding variant - stricter to avoid false positives
             if is_masked_face:
-                # For masked faces, use lenient thresholds
+                # For masked faces, allow some leniency but keep clear-match requirement
                 if variant != 'normal':
-                    # Matching masked face to masked encoding - very lenient
-                    variant_max_distance = 1.2
-                    variant_tolerance = 1.2
-                    min_confidence_threshold = 0.1
+                    # Matching masked face to masked encoding
+                    variant_max_distance = self.masked_max_distance  # 0.75
+                    variant_tolerance = self.masked_recognition_tolerance  # 0.65
+                    min_confidence_threshold = 0.5
                 else:
-                    # Matching masked face to normal encoding - still lenient but less so
-                    variant_max_distance = 0.8
-                    variant_tolerance = 0.8
-                    min_confidence_threshold = 0.2
+                    # Matching masked face to normal encoding
+                    variant_max_distance = 0.65
+                    variant_tolerance = 0.65
+                    min_confidence_threshold = 0.5
             else:
-                # For normal faces, use standard thresholds
+                # For normal faces, keep stricter thresholds
                 if variant != 'normal':
-                    # Matching normal face to masked encoding - use normal thresholds
-                    variant_max_distance = self.max_distance
-                    variant_tolerance = self.recognition_tolerance
-                    min_confidence_threshold = self.min_confidence
+                    # Matching normal face to masked encoding
+                    variant_max_distance = 0.5
+                    variant_tolerance = self.recognition_tolerance  # 0.5
+                    min_confidence_threshold = self.min_confidence  # 0.5
                 else:
-                    # Matching normal face to normal encoding - standard thresholds
-                    variant_max_distance = self.max_distance
-                    variant_tolerance = self.recognition_tolerance
-                    min_confidence_threshold = self.min_confidence
+                    # Matching normal face to normal encoding
+                    variant_max_distance = self.max_distance  # 0.5
+                    variant_tolerance = self.recognition_tolerance  # 0.5
+                    min_confidence_threshold = self.min_confidence  # 0.5
 
-            confidence_scale = variant_max_distance if variant_max_distance > 0 else self.max_distance
-            confidence = float(max(0, min(1, 1 - (best_distance / confidence_scale))))
+            # Improved confidence calculation - stricter to avoid false positives
+            # Confidence high only when distance is clearly within threshold
+            if best_distance <= variant_max_distance:
+                normalized_distance = best_distance / variant_max_distance if variant_max_distance > 0 else 1.0
+                confidence = float(max(0.2, min(1.0, 1.0 - (normalized_distance * 0.8))))
+            else:
+                confidence = float(max(0, min(0.2, 1.0 - (best_distance / variant_max_distance * 1.5))))
 
             print(f"🎯 Best match: index={best_match_index}, variant={variant}, distance={best_distance:.3f}, confidence={confidence:.3f}")
+            print(f"📊 Second best distance: {second_best_distance:.3f}, gap: {distance_gap:.3f}")
             print(f"📏 Variant thresholds: max_distance={variant_max_distance}, tolerance={variant_tolerance}, min_confidence={min_confidence_threshold}")
 
             is_within_distance = best_distance <= variant_max_distance
+            # More lenient clear match requirement for faster recognition
+            is_clear_match = (best_distance <= variant_max_distance * 0.9) or (distance_gap >= self.min_distance_gap)
+            
             match_id = self.known_face_ids[best_match_index] if is_within_distance else "Unknown"
 
-            if is_within_distance and confidence >= min_confidence_threshold:
+            if is_within_distance and confidence >= min_confidence_threshold and is_clear_match:
                 student_id = match_id
                 student_name = self.known_face_names[best_match_index]
                 print(f"✅ Recognized: {student_name} (ID: {student_id}) with confidence {confidence:.3f} using {variant} encoding")
                 return student_id, student_name, confidence
             else:
-                print(f"❌ Face not recognized: distance={best_distance:.3f} > threshold={variant_max_distance} or confidence={confidence:.3f} < min={min_confidence_threshold}")
+                reason = []
+                if not is_within_distance:
+                    reason.append(f"distance {best_distance:.3f} > {variant_max_distance}")
+                if confidence < min_confidence_threshold:
+                    reason.append(f"confidence {confidence:.3f} < {min_confidence_threshold}")
+                if not is_clear_match:
+                    reason.append(f"ambiguous match (gap {distance_gap:.3f} < {self.min_distance_gap})")
+                print(f"❌ Face not recognized: {', '.join(reason)}")
                 return "Unknown", "Unknown", confidence
                 
         except Exception as e:
@@ -1328,13 +1791,39 @@ class FixedWebFaceRecognition:
             
             print(f"📷 Loaded image: {image.shape}")
             
-            # Get face bounding box using face security module
-            bbox = self.anti_spoof_predictor.get_bbox(image)
-            if bbox is None:
+            # Get face bounding box using face_recognition module (consistent with main system)
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            detected_locations = face_recognition.face_locations(rgb_image, model='hog', number_of_times_to_upsample=1)
+            
+            if not detected_locations:
+                # Try MediaPipe as fallback if available
+                if MEDIAPIPE_AVAILABLE:
+                    print("🔄 face_recognition failed, trying MediaPipe...")
+                    detected_locations = detect_faces_with_mediapipe(rgb_image)
+            
+            if not detected_locations:
                 print("❌ No face detected in image")
                 return False, 0.0
             
-            print(f"📍 Face bbox: {bbox}")
+            # Use the first detected face
+            top, right, bottom, left = detected_locations[0]
+            
+            # Ensure coordinates are valid
+            left = max(0, int(left))
+            top = max(0, int(top))
+            right = min(image.shape[1], int(right))
+            bottom = min(image.shape[0], int(bottom))
+            
+            width = right - left
+            height = bottom - top
+            
+            # Validate bbox dimensions
+            if width <= 0 or height <= 0:
+                print(f"❌ Invalid bbox dimensions: width={width}, height={height}")
+                return False, 0.0
+            
+            bbox = [left, top, width, height]
+            print(f"📍 Face bbox: {bbox} (from location: {detected_locations[0]})")
             
             # Test anti-spoofing using the same method as check_anti_spoofing
             is_real, confidence = self._test_anti_spoofing_with_bbox(image, bbox)
@@ -1379,7 +1868,7 @@ class FixedWebAttendanceSystem:
 
     def _compute_student_signature(self):
         """Compute a hash signature of current student records for auto-sync"""
-        client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+        client = get_mongodb_client()
         db = client.attendance_system
         students = list(db.students.find({}, {
             'usn': 1,
@@ -1431,7 +1920,7 @@ class Student:
     def count(cls):
         """Count total students"""
         try:
-            client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+            client = get_mongodb_client()
             db = client.attendance_system
             count = db.students.count_documents({})
             client.close()
@@ -1443,7 +1932,7 @@ class Student:
     def get_department_counts(cls):
         """Get department counts"""
         try:
-            client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+            client = get_mongodb_client()
             db = client.attendance_system
             pipeline = [
                 {"$group": {"_id": "$department", "count": {"$sum": 1}}}
@@ -1465,7 +1954,7 @@ class Attendance:
     def get_today_count(cls):
         """Get today's attendance count"""
         try:
-            client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+            client = get_mongodb_client()
             db = client.attendance_system
             today = datetime.now().strftime('%Y-%m-%d')
             count = db.attendance.count_documents({'date': today})
@@ -1497,7 +1986,7 @@ class Attendance:
     def save(self):
         """Save attendance record"""
         try:
-            client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+            client = get_mongodb_client()
             db = client.attendance_system
             result = db.attendance.insert_one(self)
             client.close()
@@ -1512,7 +2001,7 @@ class Attendance:
 
 # Initialize Flask app
 app = Flask(__name__)
-app.secret_key = 'student_attendance_system_secret_key'
+app.secret_key = os.getenv('SECRET_KEY', 'student_attendance_system_secret_key_change_in_production')
 
 # Initialize compression
 compress = Compress()
@@ -1578,7 +2067,7 @@ def get_attendance_stats():
     """Get attendance statistics for the dashboard - FRESH DATA (no cache)"""
     try:
         # Force fresh database connection
-        client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+        client = get_mongodb_client()
         db = client.attendance_system
         
         # Get fresh counts
@@ -1616,7 +2105,7 @@ def get_attendance_stats():
 def get_todays_attendance_list():
     """Get today's attendance list with student names - FRESH DATA (no cache)"""
     try:
-        client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+        client = get_mongodb_client()
         db = client.attendance_system
         
         today = datetime.now().strftime('%Y-%m-%d')
@@ -1662,7 +2151,7 @@ def get_todays_attendance_list():
 def test_database_connection():
     """Test endpoint to verify database connection and check attendance records"""
     try:
-        client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+        client = get_mongodb_client()
         db = client.attendance_system
         
         # Test connection
@@ -1783,7 +2272,7 @@ def process_attendance():
         
         # Check today's attendance records for already marked students
         try:
-            client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+            client = get_mongodb_client()
             db = client.attendance_system
             today_records = list(db.attendance.find({'date': today}))
             for record in today_records:
@@ -1795,8 +2284,8 @@ def process_attendance():
         faces = []
         
         for i, (student_id, student_name, confidence) in enumerate(zip(student_ids, student_names, confidences)):
-            # Use the same threshold as the face recognition system
-            threshold = 0.2
+            # Use balanced threshold matching the min_confidence in _identify_face
+            threshold = 0.5  # Balanced threshold for recognition
             
             # Check anti-spoofing for each detected face
             is_real = True
@@ -1813,14 +2302,15 @@ def process_attendance():
             emotion_label = None
             emotion_conf = 0.0
             
-            # Try emotion detection if DeepFace is available
-            if EMOTION_AVAILABLE and i < len(face_locations):
+            # Try emotion detection if DeepFace is available (optimized for speed)
+            # Skip emotion detection if face is not recognized or fake to save time
+            if EMOTION_AVAILABLE and i < len(face_locations) and student_id != "Unknown" and is_real:
                 try:
                     # face_locations format: (top, right, bottom, left)
                     (top, right, bottom, left) = face_locations[i]
                     
-                    # Increase padding for better emotion detection
-                    pad = 30  # Increased from 10 to 30
+                    # Reduced padding for faster processing
+                    pad = 20
                     h, w = image.shape[:2]
                     t = max(0, top - pad)
                     l = max(0, left - pad)
@@ -1830,69 +2320,62 @@ def process_attendance():
                     face_crop = image[t:b, l:r]
                     
                     if face_crop.size > 0:
-                        # Ensure minimum face size for better emotion detection
-                        min_face_size = 100
-                        if face_crop.shape[0] < min_face_size or face_crop.shape[1] < min_face_size:
-                            # Resize face crop to minimum size while maintaining aspect ratio
-                            scale_factor = max(min_face_size / face_crop.shape[0], min_face_size / face_crop.shape[1])
-                            new_h = int(face_crop.shape[0] * scale_factor)
-                            new_w = int(face_crop.shape[1] * scale_factor)
-                            face_crop = cv2.resize(face_crop, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+                        # Resize to smaller size for faster processing (if too large)
+                        max_size = 200
+                        if face_crop.shape[0] > max_size or face_crop.shape[1] > max_size:
+                            scale = max_size / max(face_crop.shape[0], face_crop.shape[1])
+                            new_h = int(face_crop.shape[0] * scale)
+                            new_w = int(face_crop.shape[1] * scale)
+                            face_crop = cv2.resize(face_crop, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
                         
                         # Convert BGR to RGB for DeepFace
                         rgb_face_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
                         
-                        print(f"🔍 Analyzing emotion for face crop: {rgb_face_crop.shape}")
-                        
-                        # Use multiple models for better emotion detection
+                        # Use faster emotion detection with timeout
                         try:
-                            # Try with different backends for better accuracy
                             emo_result = DeepFace.analyze(
                                 rgb_face_crop, 
                                 actions=['emotion'], 
                                 enforce_detection=False,
-                                detector_backend='opencv',  # Use OpenCV detector
-                                models={'emotion': 'fer2013'}  # Use FER2013 model
+                                detector_backend='opencv'  # Use OpenCV detector (faster)
                             )
-                        except Exception as model_error:
-                            print(f"⚠️ Primary emotion model failed, trying fallback: {model_error}")
-                            # Fallback to default settings
-                            emo_result = DeepFace.analyze(
-                                rgb_face_crop, 
-                                actions=['emotion'], 
-                                enforce_detection=False
-                            )
-                        
-                        # DeepFace may return list or dict depending on version
-                        emo = emo_result[0] if isinstance(emo_result, list) else emo_result
-                        
-                        # Get emotion scores
-                        emotion_scores = emo.get('emotion', {})
-                        print(f"📊 Raw emotion scores: {emotion_scores}")
-                        
-                        # Find dominant emotion with better logic
-                        if emotion_scores:
-                            # Filter out very low confidence emotions
-                            filtered_emotions = {k: v for k, v in emotion_scores.items() if v > 5}
-                            
-                            if filtered_emotions:
-                                dominant = max(filtered_emotions, key=filtered_emotions.get)
-                                emotion_conf = float(filtered_emotions[dominant]) / 100.0
-                                emotion_label = str(dominant)
-                                
-                                # If confidence is too low, try alternative approach
-                                if emotion_conf < 0.3:
-                                    # Get the emotion with highest score regardless of threshold
-                                    dominant = max(emotion_scores, key=emotion_scores.get)
-                                    emotion_conf = float(emotion_scores[dominant]) / 100.0
-                                    emotion_label = str(dominant)
+                        except TypeError as type_error:
+                            # Fallback for different DeepFace versions
+                            if 'moddels' in str(type_error) or 'models' in str(type_error):
+                                emo_result = DeepFace.analyze(
+                                    rgb_face_crop, 
+                                    actions=['emotion'], 
+                                    enforce_detection=False
+                                )
                             else:
-                                # If all emotions are very low, use the highest one
+                                raise
+                        except Exception as model_error:
+                            # Skip emotion detection on error to save time
+                            print(f"⚠️ Emotion detection skipped: {model_error}")
+                            emo_result = None
+                        
+                        if emo_result:
+                            # DeepFace may return list or dict depending on version
+                            emo = emo_result[0] if isinstance(emo_result, list) else emo_result
+                            
+                            # Get emotion scores
+                            emotion_scores = emo.get('emotion', {})
+                            
+                            # Find dominant emotion (simplified for speed)
+                            if emotion_scores:
+                                # Get the emotion with highest score (simplified for speed)
                                 dominant = max(emotion_scores, key=emotion_scores.get)
                                 emotion_conf = float(emotion_scores[dominant]) / 100.0
                                 emotion_label = str(dominant)
+                            else:
+                                emotion_label = "neutral"
+                                emotion_conf = 0.3
+                        else:
+                            emotion_label = "neutral"
+                            emotion_conf = 0.3
                         
-                        print(f"😊 Emotion detected: {emotion_label} ({emotion_conf:.3f})")
+                        if emotion_label:
+                            print(f"😊 Emotion detected: {emotion_label} ({emotion_conf:.3f})")
                         
                 except Exception as emo_err:
                     print(f"❌ Emotion detection error: {emo_err}")
@@ -1940,8 +2423,8 @@ def process_attendance():
                 already_marked = student_id in processed_students
                 print(f"📅 Already marked today: {already_marked}")
                 
-                # Only mark attendance if face is real AND confidence >= 65%
-                anti_spoof_threshold = 0.65
+                # Only mark attendance if face is real AND confidence >= 50% (balanced threshold)
+                anti_spoof_threshold = 0.5  # Balanced threshold - requires 50% confidence it's real
                 accepted = bool(is_real and (anti_spoof_score is not None) and (anti_spoof_score >= anti_spoof_threshold))
                 print(f"✅ Attendance accepted: {accepted} (is_real={is_real}, anti_spoof_score={anti_spoof_score:.3f}, threshold={anti_spoof_threshold})")
                 
@@ -1969,12 +2452,12 @@ def process_attendance():
                         print(f"📝 Marking attendance for {student_name} (ID: {student_id})")
                         
                         # Get student details from database
-                        client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+                        client = get_mongodb_client()
                         db = client.attendance_system
                         
                         try:
                             # Get student document from database to retrieve email and other details
-                        student_doc = db.students.find_one({'usn': student_id})
+                            student_doc = db.students.find_one({'usn': student_id})
                             
                             if not student_doc:
                                 print(f"⚠️ Student document not found for USN: {student_id}")
@@ -1983,30 +2466,34 @@ def process_attendance():
                                 if student_doc:
                                     print(f"✅ Found student by name: {student_name}")
                             
-                            # Get student email early
+                            # Get student email and parent email early
                             student_email = None
+                            parent_email = None
                             if student_doc:
                                 student_email = student_doc.get('email', '').strip()
+                                parent_email = student_doc.get('parent_email', '').strip()
                                 if student_email:
                                     print(f"📧 Found email for {student_name}: {student_email}")
-                                else:
-                                    print(f"⚠️ No email found in database for {student_name} (USN: {student_id})")
+                                if parent_email:
+                                    print(f"📧 Found parent email for {student_name}: {parent_email}")
+                                if not student_email and not parent_email:
+                                    print(f"⚠️ No email addresses found in database for {student_name} (USN: {student_id})")
                             else:
                                 print(f"⚠️ Student document not found in database for {student_name} (USN: {student_id})")
                             
                             # Prepare extra data with student details and emotion
-                        extra_data = {
-                            'subject': subject,
-                            'class': class_name,
-                            'branch': student_doc.get('branch', 'Unknown') if student_doc else 'Unknown',
-                            'semester': student_doc.get('semester', 'Unknown') if student_doc else 'Unknown',
+                            extra_data = {
+                                'subject': subject,
+                                'class': class_name,
+                                'branch': student_doc.get('branch', 'Unknown') if student_doc else 'Unknown',
+                                'semester': student_doc.get('semester', 'Unknown') if student_doc else 'Unknown',
                                 'section': student_doc.get('section', 'Unknown') if student_doc else 'Unknown',
                                 'emotion': str(emotion_label) if emotion_label else 'Unknown',
-                                'emotion_confidence': float(emotion_conf)
-                        }
-                        
-                        attendance_data = Attendance.from_recognition(student_id, student_name, extra_data)
-                        
+                                'emotion_confidence': float(emotion_conf),
+                            }
+                            
+                            attendance_data = Attendance.from_recognition(student_id, student_name, extra_data)
+                            
                             # Add additional fields to attendance record
                             attendance_data['is_real'] = bool(is_real)
                             attendance_data['anti_spoof_score'] = float(anti_spoof_score)
@@ -2026,7 +2513,7 @@ def process_attendance():
                             else:
                                 # Insert attendance record with error handling
                                 try:
-                        result = db.attendance.insert_one(attendance_data)
+                                    result = db.attendance.insert_one(attendance_data)
                                     print(f"📝 Insert result: inserted_id={result.inserted_id}, acknowledged={result.acknowledged}")
                                     
                                     # Verify the insert was successful
@@ -2034,41 +2521,59 @@ def process_attendance():
                                         # Double-check by querying the database immediately
                                         verify_record = db.attendance.find_one({'_id': result.inserted_id})
                                         if verify_record:
-                            processed_students.add(student_id)
-                            face_result['marked'] = True
+                                            processed_students.add(student_id)
+                                            face_result['marked'] = True
                                             print(f"✅ Successfully marked attendance for {student_name} (Record ID: {result.inserted_id})")
                                             print(f"✅ Verified in database - Date: {verify_record.get('date')}, Student: {verify_record.get('student_name')}")
-                                            logger.info(f"Attendance marked successfully for {student_name} (ID: {student_id}) at {attendance_data.get('time')} on {attendance_data.get('date')}")
+                                            logger.info(
+                                                f"Attendance marked successfully for {student_name} (ID: {student_id}) "
+                                                f"at {attendance_data.get('time')} on {attendance_data.get('date')}"
+                                            )
                                             
                                             # Send email confirmation to student (email already retrieved above)
-                                            if student_email:
-                                                print(f"📧 Sending attendance confirmation email to {student_email} for {student_name} (USN: {student_id})")
+                                            if student_email or parent_email:
+                                                if student_email:
+                                                    print(f"📧 Sending attendance confirmation email to {student_email} for {student_name} (USN: {student_id})")
+                                                if parent_email:
+                                                    print(f"📧 Sending attendance notification email to parent {parent_email} for {student_name} (USN: {student_id})")
                                                 print(f"📧 From: {EMAIL_CONFIG['from_email']} ({EMAIL_CONFIG['from_name']})")
                                                 email_sent = send_attendance_confirmation_email(
                                                     student_email,
                                                     student_name,
                                                     subject,
                                                     class_name,
-                                                    datetime.now()
+                                                    datetime.now(),
+                                                    parent_email=parent_email
                                                 )
                                                 if email_sent:
-                                                    print(f"✅ Email sent successfully to {student_email}")
-                                                    logger.info(f"Attendance confirmation email sent to {student_email} for {student_name}")
+                                                    if student_email:
+                                                        print(f"✅ Email sent successfully to student {student_email}")
+                                                        logger.info(f"Attendance confirmation email sent to {student_email} for {student_name}")
+                                                    if parent_email:
+                                                        print(f"✅ Email sent successfully to parent {parent_email}")
+                                                        logger.info(f"Attendance notification email sent to parent {parent_email} for {student_name}")
                                                 else:
-                                                    print(f"❌ Failed to send email to {student_email} - check error logs above")
-                                                    logger.error(f"Failed to send email to {student_email} for {student_name}")
+                                                    if student_email:
+                                                        print(f"❌ Failed to send email to student {student_email} - check error logs above")
+                                                        logger.error(f"Failed to send email to {student_email} for {student_name}")
+                                                    if parent_email:
+                                                        print(f"❌ Failed to send email to parent {parent_email} - check error logs above")
+                                                        logger.error(f"Failed to send email to parent {parent_email} for {student_name}")
                                             else:
                                                 print(f"⚠️ Cannot send email: No email address found for student {student_name} (USN: {student_id})")
-                                                print(f"   Please ensure the student is registered with an email address in the database")
-                                                logger.warning(f"No email address for student {student_name} (USN: {student_id}) - email not sent")
+                                                print("   Please ensure the student is registered with student email and/or parent email in the database")
+                                                logger.warning(f"No email addresses found for student {student_name} (USN: {student_id}) - email not sent")
                                         else:
                                             print(f"❌ ERROR: Attendance record not found after insert! Insert ID: {result.inserted_id}")
                                             logger.error(f"Failed to verify attendance record for {student_name} (ID: {student_id})")
                                             face_result['marked'] = False
                                             face_result['reason'] = 'Database verification failed'
                                     else:
-                                        print(f"❌ ERROR: Failed to insert attendance record - no inserted_id or not acknowledged")
-                                        logger.error(f"Failed to insert attendance record for {student_name} (ID: {student_id}) - acknowledged={result.acknowledged if result else 'None'}")
+                                        print("❌ ERROR: Failed to insert attendance record - no inserted_id or not acknowledged")
+                                        logger.error(
+                                            f"Failed to insert attendance record for {student_name} (ID: {student_id}) "
+                                            f"- acknowledged={result.acknowledged if result else 'None'}"
+                                        )
                                         face_result['marked'] = False
                                         face_result['reason'] = 'Database insert failed - not acknowledged'
                                 except Exception as insert_error:
@@ -2153,7 +2658,8 @@ def registration():
                 'section': request.form['section'],
                 'phone': request.form.get('phone'),
                 'address': request.form.get('address'),
-                'email': request.form.get('email', '').strip()
+                'email': request.form.get('email', '').strip(),
+                'parent_email': request.form.get('parent_email', '').strip()
             }
             logger.info(f"Registration form data: usn={student_info.get('usn')}, name={student_info.get('name')}")
 
@@ -2224,7 +2730,7 @@ def registration():
 
             # Save to MongoDB
             try:
-                client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+                client = get_mongodb_client()
                 db = client.attendance_system
                 
                 # Create student document
@@ -2237,6 +2743,7 @@ def registration():
                     'phone': student_info.get('phone'),
                     'address': student_info.get('address'),
                     'email': student_info.get('email', ''),
+                    'parent_email': student_info.get('parent_email', ''),
                     'registered_at': datetime.now(),
                     'face_encoding': student_info.get('face_encoding'),
                     'face_encoding_masked': student_info.get('face_encoding_masked'),
@@ -2331,7 +2838,7 @@ def get_attendance():
         section_filter = request.args.get('section')
         
         # Connect to MongoDB
-        client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+        client = get_mongodb_client()
         db = client.attendance_system
         
         # Build query
@@ -2409,7 +2916,7 @@ def generate_daily_summary():
         today = datetime.now().date()
         today_str = today.strftime('%Y-%m-%d')
         
-        client = MongoClient("mongodb://localhost:27017/", serverSelectionTimeoutMS=5000)
+        client = get_mongodb_client()
         db = client.attendance_system
         
         # Get all attendance records for today
@@ -2548,14 +3055,24 @@ if __name__ == '__main__':
                 'error': str(e)
             }), 500
     
-    # Automatically open the web browser (only in local development)
-    if os.getenv('FLASK_ENV') != 'production' and os.getenv('RAILWAY_ENVIRONMENT') is None:
-        threading.Timer(1.0, lambda: webbrowser.open('http://127.0.0.1:5000')).start()
-    
     # Start Flask app
     try:
         port = int(os.getenv('PORT', 5000))
-        app.run(debug=False, host='0.0.0.0', port=port)
+        host = '0.0.0.0'
+        local_url = f"http://127.0.0.1:{port}"
+        
+        print(f"✅ Flask app starting on port {port}")
+        print(f"🌐 Access the web UI at {local_url}")
+        
+        # Automatically open browser for local development
+        if os.getenv('FLASK_ENV') != 'production' and os.getenv('RAILWAY_ENVIRONMENT') is None:
+            def open_browser():
+                print(f"🖥️ Opening browser at {local_url}")
+                webbrowser.open(local_url)
+            
+            threading.Timer(1.5, open_browser).start()
+        
+        app.run(debug=False, host=host, port=port)
     except Exception as e:
         print(f"Error starting Flask app: {e}")
         import traceback

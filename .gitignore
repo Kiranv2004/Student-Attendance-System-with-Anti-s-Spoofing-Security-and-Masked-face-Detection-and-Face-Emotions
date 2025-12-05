@@ -22,9 +22,14 @@ wheels/
 
 # Virtual Environment
 venv/
-ENV/
 env/
+ENV/
 .venv
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
 
 # IDE
 .vscode/
@@ -33,23 +38,28 @@ env/
 *.swo
 *~
 
-# Environment variables
-.env
-.env.local
-
-# Debug files
-debug_frames/
-*.log
-
 # OS
 .DS_Store
 Thumbs.db
 
-# MongoDB
+# Logs
+*.log
+logs/
+
+# Database
 *.db
 *.sqlite
+*.sqlite3
 
-# Model files (if too large, use Git LFS)
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Model files (if too large for Git)
+# Uncomment if models exceed Git LFS limits
 # face_security/resources/anti_spoof_models/*.pth
 # face_security/resources/detection_model/*.caffemodel
 
+# Render
+.render/

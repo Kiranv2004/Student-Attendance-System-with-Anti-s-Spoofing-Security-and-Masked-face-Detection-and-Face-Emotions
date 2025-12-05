@@ -672,6 +672,18 @@
         const motivationAuthor = document.getElementById('motivation-author');
         const motivationEmotion = document.getElementById('motivation-emotion');
 
+        // Helper functions for identifying unknown faces
+        function normalizeStudentId(studentId) {
+            if (studentId === undefined || studentId === null) return '';
+            return studentId.toString().trim();
+        }
+
+        function isUnknownStudent(face) {
+            if (!face) return true;
+            const normalizedId = normalizeStudentId(face.student_id);
+            return !normalizedId || normalizedId.toLowerCase() === 'unknown';
+        }
+
         // Motivational quotes for each emotion
         const motivationQuotes = {
             happy: [
@@ -821,10 +833,10 @@
                 autoAttendanceInterval = null;
             }
             
-                // Update system status
-                systemStatus.style.backgroundColor = '#fee2e2';
-                systemStatus.style.color = '#ef4444';
-                systemStatus.innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i>Camera stopped - attendance marking inactive';
+            // Update system status
+            systemStatus.style.backgroundColor = '#fee2e2';
+            systemStatus.style.color = '#ef4444';
+            systemStatus.innerHTML = '<i class="fas fa-exclamation-triangle me-2"></i>Camera stopped - attendance marking inactive';
                 
                 // Hide motivation box when camera stops
                 motivationBox.style.display = 'none';
@@ -999,18 +1011,37 @@
         
         // Update detection results display
         function updateDetectionResults(data) {
-            // Update header detection display
-            updateHeaderDetection(data);
-            
-            if (data.faces && data.faces.length > 0) {
+            const faces = Array.isArray(data.faces) ? data.faces : [];
+            const totalFaces = Number(data.total_faces) || 0;
+            let displayFaces = faces;
+            if (!displayFaces.length && totalFaces > 0) {
+                const placeholderFace = {
+                    student_id: 'Unknown',
+                    name: 'Unknown Person',
+                    marked: false,
+                    already_marked: false,
+                    confidence: 0,
+                    anti_spoof_score: 0.0,
+                    is_real: true,
+                    emotion: 'Unknown',
+                    emotion_confidence: 0.0
+                };
+                displayFaces = [placeholderFace];
+            }
+
+            updateHeaderDetection(displayFaces, totalFaces);
+
+            if (displayFaces.length > 0) {
                 // Display detected faces and results
                 let resultsHTML = '<div class="table-responsive"><table class="table table-striped">';
                 resultsHTML += '<thead><tr><th>Student ID</th><th>Name</th><th>Status</th><th>Emotion</th><th>Anti-Spoofing</th><th>Time</th><th>Confidence</th></tr></thead><tbody>';
                 
-                data.faces.forEach(face => {
+                displayFaces.forEach(face => {
+                    const isUnknownFace = isUnknownStudent(face);
+                    
                     let statusClass, statusIcon, status;
                     
-                    if (face.student_id === 'Unknown') {
+                    if (isUnknownFace) {
                         statusClass = 'text-warning';
                         statusIcon = '<i class="fas fa-question-circle"></i>';
                         status = 'Unrecognized';
@@ -1043,13 +1074,17 @@
                     // Format anti-spoofing result
                     let antiSpoofDisplay = 'N/A';
                     let antiSpoofClass = '';
+                    let antiSpoofIcon = '';
                     if (face.is_real !== undefined) {
                         if (face.is_real) {
-                            antiSpoofDisplay = `Real (${(face.anti_spoof_score * 100).toFixed(1)}%)`;
+                            antiSpoofDisplay = `✅ Real (${(face.anti_spoof_score * 100).toFixed(1)}%)`;
                             antiSpoofClass = 'text-success';
+                            antiSpoofIcon = '<i class="fas fa-check-circle"></i> ';
                         } else {
-                            antiSpoofDisplay = `Fake (${(face.anti_spoof_score * 100).toFixed(1)}%)`;
-                            antiSpoofClass = 'text-danger';
+                            // Fake face - make it very prominent
+                            antiSpoofDisplay = `⚠️ FAKE FACE (${(face.anti_spoof_score * 100).toFixed(1)}%)`;
+                            antiSpoofClass = 'text-danger fw-bold';
+                            antiSpoofIcon = '<i class="fas fa-exclamation-triangle"></i> ';
                         }
                     } else {
                         antiSpoofDisplay = 'Unavailable';
@@ -1065,7 +1100,7 @@
                             <td>${face.name || 'Unrecognized Face'}</td>
                             <td class="${statusClass}">${statusIcon} ${status}</td>
                             <td>${(face.emotion ? face.emotion : 'Unknown')}${(face.emotion_confidence ? ' (' + Math.round(face.emotion_confidence * 100) + '%)' : '')}</td>
-                            <td class="${antiSpoofClass}">${antiSpoofDisplay}</td>
+                            <td class="${antiSpoofClass}">${antiSpoofIcon}${antiSpoofDisplay}</td>
                             <td>${new Date().toLocaleTimeString()}</td>
                             <td>${confidenceDisplay}</td>
                         </tr>
@@ -1075,22 +1110,29 @@
                 resultsHTML += '</tbody></table></div>';
                 
                 // Add a summary above the table
-                const markedCount = data.faces.filter(face => face.marked).length;
-                const alreadyMarkedCount = data.faces.filter(face => face.already_marked).length;
-                const unknownCount = data.faces.filter(face => face.student_id === 'Unknown').length;
+                const markedCount = displayFaces.filter(face => face.marked).length;
+                const alreadyMarkedCount = displayFaces.filter(face => face.already_marked).length;
+                const unknownCount = faces.length > 0 ? faces.filter(isUnknownStudent).length : totalFaces;
+                const fakeFaceCount = displayFaces.filter(face => face.is_real === false).length;
                 
                 let summaryHTML = '<div class="alert ';
-                if (markedCount > 0) {
+                if (fakeFaceCount > 0) {
+                    summaryHTML += 'alert-danger';
+                } else if (markedCount > 0) {
                     summaryHTML += 'alert-success';
                 } else if (alreadyMarkedCount > 0) {
                     summaryHTML += 'alert-info';
-                } else if (unknownCount === data.faces.length) {
+                } else if (unknownCount > 0) {
                     summaryHTML += 'alert-warning';
                 } else {
                     summaryHTML += 'alert-secondary';
                 }
                 summaryHTML += ' mb-3">';
                 
+                // Show fake face warning first and prominently
+                if (fakeFaceCount > 0) {
+                    summaryHTML += `<i class="fas fa-exclamation-triangle me-2"></i><strong>${fakeFaceCount}</strong> <strong>FAKE FACE(S) DETECTED!</strong> Attendance will not be marked. `;
+                }
                 if (markedCount > 0) {
                     summaryHTML += `<i class="fas fa-check-circle me-2"></i>Successfully marked attendance for <strong>${markedCount}</strong> student(s)! `;
                 }
@@ -1110,52 +1152,68 @@
         }
         
         // Update header detection display
-        function updateHeaderDetection(data) {
+        function updateHeaderDetection(faces, totalFaces) {
             const detectionDisplay = document.getElementById('detection-display');
             const detectedStudent = document.getElementById('detected-student');
             const faceStatus = document.getElementById('face-status');
             const noDetection = document.getElementById('no-detection');
-            
-            if (data.faces && data.faces.length > 0) {
-                const face = data.faces[0]; // Show first detected face
-                
-                if (face.student_id !== 'Unknown') {
-                    // Show detected student name
-                    detectedStudent.textContent = face.name || face.student_id;
+
+            const faceList = Array.isArray(faces) ? faces : [];
+            const hasFaceData = faceList.length > 0;
+            const hasAnyFace = totalFaces > 0;
+
+            if (hasFaceData || hasAnyFace) {
+                let faceToShow = null;
+                if (hasFaceData) {
+                    faceToShow = faceList.find(isUnknownStudent) || faceList[0];
+                } else {
+                    faceToShow = {
+                        student_id: 'Unknown',
+                        name: 'Unknown Person',
+                        is_real: true,
+                        anti_spoof_score: 0.0,
+                        emotion: 'Unknown'
+                    };
+                }
+
+                const faceIsUnknown = isUnknownStudent(faceToShow);
+
+                if (!faceIsUnknown) {
+                    detectedStudent.textContent = faceToShow.name || faceToShow.student_id || 'Student';
                     detectedStudent.style.display = 'inline';
                     
-                    // Determine face status (real/fake) with detailed info
-                    if (face.is_real !== undefined) {
-                        if (face.is_real) {
-                            faceStatus.textContent = `Real Face (${(face.anti_spoof_score * 100).toFixed(1)}%)`;
+                    if (faceToShow.is_real !== undefined) {
+                        if (faceToShow.is_real) {
+                            faceStatus.textContent = `Real Face (${(faceToShow.anti_spoof_score * 100).toFixed(1)}%)`;
                             faceStatus.className = 'face-status real';
+                            faceStatus.style.color = '';
+                            faceStatus.style.fontWeight = '';
                         } else {
-                            faceStatus.textContent = `Fake Face (${(face.anti_spoof_score * 100).toFixed(1)}%)`;
+                            // Fake face detected - make it very prominent
+                            faceStatus.textContent = `⚠️ FAKE FACE (${(faceToShow.anti_spoof_score * 100).toFixed(1)}%)`;
                             faceStatus.className = 'face-status fake';
+                            faceStatus.style.color = '#dc3545';
+                            faceStatus.style.fontWeight = 'bold';
                         }
-                        // Append emotion next to status
-                        if (face.emotion) {
-                            faceStatus.textContent += ` • ${face.emotion}`;
+                        if (faceToShow.emotion) {
+                            faceStatus.textContent += ` • ${faceToShow.emotion}`;
                         }
                     } else {
-                        // If anti-spoofing is not available, show as unknown
                         faceStatus.textContent = 'Anti-spoofing unavailable';
                         faceStatus.className = 'face-status unknown';
+                        faceStatus.style.color = '';
+                        faceStatus.style.fontWeight = '';
                     }
-                    
-                    detectionDisplay.style.display = 'inline-block';
-                    if (noDetection) noDetection.style.display = 'none';
                 } else {
-                    // Unknown person
                     detectedStudent.textContent = 'Unknown Person';
                     detectedStudent.style.display = 'inline';
                     faceStatus.textContent = 'Unknown';
                     faceStatus.className = 'face-status unknown';
-                    detectionDisplay.style.display = 'inline-block';
-                    if (noDetection) noDetection.style.display = 'none';
                 }
+
+                detectionDisplay.style.display = 'inline-block';
+                if (noDetection) noDetection.style.display = 'none';
             } else {
-                // No faces detected
                 detectionDisplay.style.display = 'none';
                 if (noDetection) noDetection.style.display = 'inline';
             }
