@@ -2,8 +2,9 @@ services:
   - type: web
     name: student-attendance-system
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python fixed_integrated_attendance_system.py
+    runtime: python-3.11
     envVars:
       - key: PORT
         generateValue: true
