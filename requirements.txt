@@ -11,19 +11,20 @@ Werkzeug>=2.3.0
 pymongo>=4.5.0
 
 # Computer Vision & Image Processing
-opencv-python>=4.8.0
+# Use headless version to reduce dependencies
+opencv-python-headless>=4.8.0
 Pillow>=10.2.0
 # MediaPipe is optional - install manually if needed: pip install mediapipe
 # mediapipe>=0.10.0
 
 # Face Recognition (includes dlib)
-# Note: dlib and face-recognition may need manual installation on some platforms
+# Try to use pre-built wheels to avoid compilation
 face-recognition>=1.3.0
 face-recognition-models>=0.3.0
-# dlib is installed as dependency of face-recognition, but may need system libraries
-# dlib>=19.24.0
 
 # Deep Learning & ML
+# Note: Install CPU-only versions manually to save memory:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 torch>=2.5.0
 torchvision>=0.20.0
 

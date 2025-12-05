@@ -2,9 +2,11 @@ services:
   - type: web
     name: student-attendance-system
     env: python
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    buildCommand: pip install --upgrade pip setuptools wheel && pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt
     startCommand: python fixed_integrated_attendance_system.py
     runtime: python-3.11
+    plan: free
+    healthCheckPath: /
     envVars:
       - key: PORT
         generateValue: true
