@@ -192,7 +192,7 @@ Camera Feed → Frame Capture → Face Detection → Anti-Spoofing Check
 - Save to MongoDB `attendance` collection:
   ```json
   {
-    "student_id": "1RV21CS001",
+    "student_id": "1VE22CS001",
     "student_name": "John Doe",
     "date": "2025-10-30",
     "time": "09:15:30",
