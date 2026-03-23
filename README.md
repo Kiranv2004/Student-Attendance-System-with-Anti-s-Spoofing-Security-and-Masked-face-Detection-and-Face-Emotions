@@ -822,9 +822,9 @@ StudentAttendanceSystem/
 
 ## 👨‍💻 Developer Information
 
-**Repository:** https://github.com/Kiranv2004/StudentAttendanceSystem  
+**Repository:** [https://github.com/Kiranv2004/StudentAttendanceSystem ](https://github.com/Kiranv2004/Student-Attendance-System-with-Anti-s-Spoofing-Security-and-Masked-face-Detection-and-Face-Emotions) 
 **Developer:** Kiran V  
-**Last Updated:** November 2025
+**Last Updated:** Jan 2026
 
 ---
 
